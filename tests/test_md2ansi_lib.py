@@ -79,6 +79,18 @@ def test_inline_code_spans_a_newline():
     assert "first line\nsecond line" in out
 
 
+def test_inline_code_double_backtick_allows_internal_backtick():
+    out = strip_ansi(md.md2ansi("use ``code with `internal` ticks`` here"))
+    assert "code with `internal` ticks" in out
+    # The wrapping `` should be consumed, not left as plain text.
+    assert "``" not in out
+
+
+def test_inline_code_double_backtick_spans_newline():
+    out = strip_ansi(md.md2ansi("text ``first\nsecond`` end"))
+    assert "first\nsecond" in out
+
+
 def test_inline_code_stops_at_block_boundary():
     # An unclosed backtick must NOT eat the following heading.
     out = strip_ansi(md.md2ansi("text `open across\n\n# heading"))

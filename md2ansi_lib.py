@@ -487,7 +487,14 @@ _MD_FOOTNOTE_DEF = r"""
 
 _MD_FOOTNOTE_REF = r" \[ \^ (?P<*id> [^\]\n]+ ) \] "
 
-_MD_CODE_INLINE = rf" ` (?P<*> (?: [^`\n] | \n (?! {_BSA} ) )+ ) ` "
+# Double-backtick inline code — body may contain single backticks; closes on
+# the first ``. Listed before the single-backtick rule so it wins on `` ``…`` ``.
+_MD_CODE_INLINE2 = rf"""
+    `` (?P<*>
+        (?: (?!``) (?: [^\n] | \n (?! {_BSA} ) ) )+
+    ) ``
+"""
+_MD_CODE_INLINE  = rf" ` (?P<*> (?: [^`\n] | \n (?! {_BSA} ) )+ ) ` "
 
 _MD_IMAGE = r" ! \[ (?P<*alt> [^\]\n]* ) \] \( (?P<*url> [^)\n]* ) \) "
 
@@ -545,6 +552,7 @@ def _m2a_code_lambda(code_ctx, lang=None):
 # into INLINE so heading/quote/cell text never re-triggers block rules
 # (otherwise "1. Goals" inside `## 1. Goals` would render as a list).
 _M2A_RULES_INLINE_RAW = (
+    ("code_inline2",  _MD_CODE_INLINE2, _m2a_fmt_inline_code,  None),
     ("code_inline",   _MD_CODE_INLINE,  _m2a_fmt_inline_code,  None),
     ("image",         _MD_IMAGE,        _m2a_fmt_image,        None),
     ("link",          _MD_LINK,         M2A_COLOR_LINK,        _M2A_RECURSE_SELF),
