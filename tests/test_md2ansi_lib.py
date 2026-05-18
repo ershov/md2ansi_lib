@@ -321,14 +321,23 @@ def test_code_frame_generic_extracts_language_tag():
     assert "Code: rust" in plain
 
 
-def test_code_frame_width_matches_body():
+def test_code_frame_width_extends_one_past_body():
     src = "```python\n" + "x" * 30 + "\n```"
     lines = strip_ansi(md.md2ansi(src)).splitlines()
     top, body, bot = lines[0], lines[1], lines[2]
     assert top.startswith("┌") and top.endswith("┐")
     assert bot.startswith("└") and bot.endswith("┘")
-    # Both rails the same width as the widest body line — no extra padding.
-    assert len(top) == len(bot) == len(body) == 30
+    # Body indented 1 space; frame sticks out 1 char past body on each side.
+    assert body.startswith(" ")
+    assert body.lstrip() == "x" * 30
+    assert len(top) == len(bot) == 32   # 30 (body) + 2 (overhang)
+
+
+def test_code_body_is_indented_by_one_space():
+    plain = strip_ansi(md.md2ansi("```\nline1\nline2\n```"))
+    lines = plain.splitlines()
+    assert lines[1] == " line1"
+    assert lines[2] == " line2"
 
 
 def test_code_frame_width_at_least_label_minimum():
@@ -343,8 +352,8 @@ def test_code_frame_width_at_least_label_minimum():
 def test_code_frame_no_blank_line_before_closing():
     plain = strip_ansi(md.md2ansi("```\nline1\nline2\n```"))
     lines = plain.splitlines()
-    # Order: top, line1, line2, bot — with no blank between line2 and bot.
-    assert lines[-2] == "line2"
+    # Order: top, " line1", " line2", bot — no blank line between body and bot.
+    assert lines[-2] == " line2"
     assert lines[-1].startswith("└") and lines[-1].endswith("┘")
 
 

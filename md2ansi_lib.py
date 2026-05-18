@@ -287,20 +287,25 @@ def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
         default=0,
     )
     label = f"Code: {lang}" if lang else "Code"
-    # Layout: ┌── label ─...─┐. Total visible width (corners included) equals
-    # body_width, unless the label needs more room. `inner` is the dash count
-    # between the corners — so total = inner + 2.
+    # Layout: the frame sticks out 1 char past the body on each side, and the
+    # body is indented by 1 space so it sits inside the frame. `inner` is the
+    # dash count between the corners; total visible frame width = inner + 2.
     min_inner = len(label) + 6   # "── " + label + " ──"
-    inner = max(body_width - 2, min_inner)
+    inner = max(body_width, min_inner)
     right_dashes = inner - 4 - len(label)
     top_text = f"┌── {label} {'─' * right_dashes}┐"
     bot_text = f"└{'─' * inner}┘"
     top = _m2a_inject_color(top_text, f"{current_style};38;5;239", current_style)
     bot = _m2a_inject_color(bot_text, f"{current_style};38;5;239", current_style)
-    # `body` capture includes the final content line's terminator, so `rendered`
-    # usually ends with \n already — don't add a second one.
-    sep = "" if rendered.endswith("\n") else "\n"
-    return f"{top}\n{rendered}{sep}{bot}"
+    # Indent each body line by one space (frame's left corner sits in column 0).
+    indented = "\n".join(" " + ln for ln in rendered.split("\n"))
+    # `body` capture includes the final content line's terminator, so `indented`
+    # usually ends with " " (a trailing indented empty line) — strip that one
+    # space so the closing rail sits flush below the last content line.
+    if indented.endswith("\n "):
+        indented = indented[:-1]
+    sep = "" if indented.endswith("\n") else "\n"
+    return f"{top}\n{indented}{sep}{bot}"
 
 
 # ─── Section 6: Rule tables ──────────────────────────────────────────────────
