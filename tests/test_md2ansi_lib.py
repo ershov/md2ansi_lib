@@ -300,6 +300,54 @@ def test_inject_color_empty_string():
     assert md._m2a_inject_color("", "1", "0") == "\x1b[1m\x1b[0m"
 
 
+# ─── Code-block frame ────────────────────────────────────────────────────────
+
+
+def test_code_frame_has_language_label():
+    plain = strip_ansi(md.md2ansi("```python\ndef f(): return 42\n```"))
+    assert "Code: python" in plain
+    assert plain.splitlines()[0].startswith("┌── Code: python ")
+    assert plain.splitlines()[0].endswith("┐")
+
+
+def test_code_frame_generic_no_tag_uses_bare_label():
+    plain = strip_ansi(md.md2ansi("```\nplain\n```"))
+    first = plain.splitlines()[0]
+    assert "Code" in first and "Code:" not in first
+
+
+def test_code_frame_generic_extracts_language_tag():
+    plain = strip_ansi(md.md2ansi("```rust\nfn main() {}\n```"))
+    assert "Code: rust" in plain
+
+
+def test_code_frame_width_matches_body():
+    src = "```python\n" + "x" * 30 + "\n```"
+    lines = strip_ansi(md.md2ansi(src)).splitlines()
+    top, body, bot = lines[0], lines[1], lines[2]
+    assert top.startswith("┌") and top.endswith("┐")
+    assert bot.startswith("└") and bot.endswith("┘")
+    # Both rails the same width as the widest body line — no extra padding.
+    assert len(top) == len(bot) == len(body) == 30
+
+
+def test_code_frame_width_at_least_label_minimum():
+    # Tiny body — frame still wide enough for the "Code: javascript" label.
+    plain = strip_ansi(md.md2ansi("```javascript\nx\n```"))
+    top = plain.splitlines()[0]
+    assert "Code: javascript" in top
+    # ┌── Code: javascript ──┐  → at minimum 22 chars visible width.
+    assert len(top) >= len("┌── Code: javascript ──┐")
+
+
+def test_code_frame_no_blank_line_before_closing():
+    plain = strip_ansi(md.md2ansi("```\nline1\nline2\n```"))
+    lines = plain.splitlines()
+    # Order: top, line1, line2, bot — with no blank between line2 and bot.
+    assert lines[-2] == "line2"
+    assert lines[-1].startswith("└") and lines[-1].endswith("┘")
+
+
 # ─── Multi-line span styling ─────────────────────────────────────────────────
 
 

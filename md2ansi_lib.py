@@ -275,15 +275,32 @@ def _m2a_render_footnotes(state, current_style):
     return "\n".join(out) + "\n"
 
 
-def _m2a_fmt_code(m, current_style, context, state, code_context):
+def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
     name = _m2a_fired_rule(m, context)
     body = m.group(f"{name}_body")
+    if lang is None:
+        # Generic block — read the language tag captured by the pattern, if any.
+        lang = (m.groupdict().get(f"{name}_lang") or "").strip()
     rendered = _md2ansi(body, current_style, code_context, state)
-    # Subtle frame: dim corners around the block, body keeps its own coloring.
-    bar = "─" * 40
-    top = _m2a_inject_color(f"┌{bar}", f"{current_style};38;5;239", current_style)
-    bot = _m2a_inject_color(f"└{bar}", f"{current_style};38;5;239", current_style)
-    return f"{top}\n{rendered}\n{bot}"
+    body_width = max(
+        (_m2a_visible_len(ln) for ln in rendered.split("\n")),
+        default=0,
+    )
+    label = f"Code: {lang}" if lang else "Code"
+    # Layout: ┌── label ─...─┐. Total visible width (corners included) equals
+    # body_width, unless the label needs more room. `inner` is the dash count
+    # between the corners — so total = inner + 2.
+    min_inner = len(label) + 6   # "── " + label + " ──"
+    inner = max(body_width - 2, min_inner)
+    right_dashes = inner - 4 - len(label)
+    top_text = f"┌── {label} {'─' * right_dashes}┐"
+    bot_text = f"└{'─' * inner}┘"
+    top = _m2a_inject_color(top_text, f"{current_style};38;5;239", current_style)
+    bot = _m2a_inject_color(bot_text, f"{current_style};38;5;239", current_style)
+    # `body` capture includes the final content line's terminator, so `rendered`
+    # usually ends with \n already — don't add a second one.
+    sep = "" if rendered.endswith("\n") else "\n"
+    return f"{top}\n{rendered}{sep}{bot}"
 
 
 # ─── Section 6: Rule tables ──────────────────────────────────────────────────
@@ -427,7 +444,7 @@ _MD_CODE_JS = r"""
     ^ [ \t]* ``` [ \t]* $
 """
 _MD_CODE_GEN = r"""
-    ^ [ \t]* (?:```|~~~) \w* [ \t]* \n
+    ^ [ \t]* (?:```|~~~) (?P<*lang> \w* ) [ \t]* \n
     (?P<*body> (?: (?! ^ [ \t]* (?:```|~~~) [ \t]* $ ) [\s\S] )* )
     ^ [ \t]* (?:```|~~~) [ \t]* $
 """
@@ -494,9 +511,11 @@ _MD_ITALIC = rf"""
     ) \* (?!\*)
 """
 
-# Lambdas binding the code context for each language-specific code block.
-def _m2a_code_lambda(code_ctx):
-    return lambda m, cs, ctx, st: _m2a_fmt_code(m, cs, ctx, st, code_ctx)
+# Lambdas binding the code context (and display language label) for each
+# language-specific code block. The generic block passes lang=None so the
+# handler reads it from the pattern's captured `_lang` group.
+def _m2a_code_lambda(code_ctx, lang=None):
+    return lambda m, cs, ctx, st: _m2a_fmt_code(m, cs, ctx, st, code_ctx, lang)
 
 # Inline rules — used to build M2A_CONTEXT_MD_INLINE (where _M2A_RECURSE_SELF
 # resolves to INLINE itself), and reused inside _M2A_RULES_MD after rebinding
@@ -531,9 +550,9 @@ _M2A_RULES_MD = (
     ("h5",            _MD_H5,           "38;5;93",                                    M2A_CONTEXT_MD_INLINE),
     ("h6",            _MD_H6,           "38;5;239",                                   M2A_CONTEXT_MD_INLINE),
     ("hr",            _MD_HR,           _m2a_fmt_hr,                                  None),
-    ("code_python",   _MD_CODE_PY,      _m2a_code_lambda(M2A_CONTEXT_CODE_PYTHON),    None),
-    ("code_bash",     _MD_CODE_BASH,    _m2a_code_lambda(M2A_CONTEXT_CODE_BASH),      None),
-    ("code_js",       _MD_CODE_JS,      _m2a_code_lambda(M2A_CONTEXT_CODE_JAVASCRIPT),None),
+    ("code_python",   _MD_CODE_PY,      _m2a_code_lambda(M2A_CONTEXT_CODE_PYTHON,     "python"),     None),
+    ("code_bash",     _MD_CODE_BASH,    _m2a_code_lambda(M2A_CONTEXT_CODE_BASH,       "bash"),       None),
+    ("code_js",       _MD_CODE_JS,      _m2a_code_lambda(M2A_CONTEXT_CODE_JAVASCRIPT, "javascript"),None),
     ("code_generic",  _MD_CODE_GEN,     _m2a_code_lambda(M2A_CONTEXT_CODE_GENERIC),   None),
     ("blockquote",    _MD_BLOCKQUOTE,   _m2a_fmt_blockquote,                          None),
     ("table",         _MD_TABLE,        _m2a_fmt_table,                               None),
