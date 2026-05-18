@@ -1,8 +1,2 @@
-*.pyc
-__pycache__/
-.PLAN.md.bak
-.worktrees
-.tmp
-.scratch
-tmp
-.claude
+.swp
+*.swp
