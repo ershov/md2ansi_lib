@@ -165,9 +165,24 @@ def test_footnote_ref_and_def():
     assert "First." in plain and "Second." in plain
 
 
-def test_footnote_missing_definition():
+def test_footnote_missing_definition_is_silent():
+    # Inline ref still renders; the footnotes section is suppressed (no warning).
     out = md.md2ansi("Ref[^missing] here.")
-    assert "Missing footnote definition" in out
+    assert "[^missing]" in out
+    assert "Missing footnote definition" not in out
+    assert "Footnotes:" not in out
+
+
+def test_footnote_section_skips_undefined_entries():
+    # `a` has a def, `b` doesn't — only `a` appears in the section.
+    out = md.md2ansi("Refs [^a] and [^b].\n\n[^a]: A note.")
+    assert "Footnotes:" in out
+    assert "A note." in out
+    plain = strip_ansi(out)
+    # `[^b]` shows up inline, but not as a footnote entry.
+    section_start = plain.index("Footnotes:")
+    assert "[^b]" not in plain[section_start:]
+    assert "[^a]" in plain[section_start:]
 
 
 def test_footnote_order_follows_appearance():

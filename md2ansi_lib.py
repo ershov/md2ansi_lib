@@ -264,11 +264,12 @@ def _m2a_fmt_footnote_ref(m, current_style, context, state):
 
 
 def _m2a_render_footnotes(state, current_style):
-    if not state.footnote_order:
+    # Refs without a matching definition are silently dropped from the section.
+    entries = [(fid, state.footnotes[fid]) for fid in state.footnote_order if fid in state.footnotes]
+    if not entries:
         return ""
     out = ["", _m2a_inject_color("Footnotes:", f"{current_style};1", current_style)]
-    for fid in state.footnote_order:
-        text = state.footnotes.get(fid, "Missing footnote definition")
+    for fid, text in entries:
         ref = _m2a_inject_color(f"[^{fid}]", f"{current_style};38;5;226", current_style)
         out.append(f"  {ref} {text}")
     return "\n".join(out) + "\n"
