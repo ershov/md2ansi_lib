@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """md2ansi_lib — single-file, zero-dependency Markdown-to-ANSI library.
 
 See md2ansi_lib.design.md for architecture, naming conventions, and rule tables.
@@ -540,3 +542,14 @@ def md2ansi(text, current_style="0", line_width=80):
     if state.footnote_order:
         out += _m2a_render_footnotes(state, current_style)
     return out
+
+
+if __name__ == "__main__":
+    import sys
+    paths = sys.argv[1:]
+    if paths:
+        for path in paths:
+            with open(path) as f:
+                sys.stdout.write(md2ansi(f.read()))
+    else:
+        sys.stdout.write(md2ansi(sys.stdin.read()))
