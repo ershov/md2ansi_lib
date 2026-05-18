@@ -537,7 +537,14 @@ def _md2ansi(text, current_style, context, state):
                         inner = _md2ansi(inner, new_style, actual_recurse, state)
                     elif inner is None:
                         inner = m.group(0)
-                    return f"\x1b[{new_style}m{inner}\x1b[{current_style}m"
+                    open_sgr = f"\x1b[{new_style}m"
+                    # Re-emit open SGR after each interior newline so every line
+                    # of a multi-line span (e.g. triple-quoted strings, fenced
+                    # blocks) is self-styled — survives pagers/pipelines that
+                    # don't carry SGR state across line breaks.
+                    if "\n" in inner:
+                        inner = inner.replace("\n", f"\n{open_sgr}")
+                    return f"{open_sgr}{inner}\x1b[{current_style}m"
                 case _ as func:
                     return func(m, current_style, context, state)
         return m.group(0)

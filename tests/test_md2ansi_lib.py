@@ -252,6 +252,30 @@ def test_py_string_does_not_eat_identifier_tail():
     assert f"{ESC}0;38;5;114mr\"x\"{ESC}0m" not in out
 
 
+# ─── Multi-line span styling ─────────────────────────────────────────────────
+
+
+def test_multiline_string_emits_sgr_on_each_line():
+    # A triple-quoted Python string spans many lines. The opening SGR must be
+    # re-emitted after each interior newline so the color survives pagers /
+    # tools that don't carry SGR state across line breaks.
+    snippet = 'x = r"""line1\nline2\nline3"""'
+    out = md._md2ansi(snippet, "0", md.M2A_CONTEXT_CODE_PYTHON, md.M2A_DocumentState())
+    for line in ("line1", "line2", "line3"):
+        # Each interior line must be preceded by the string-color SGR.
+        assert f"\x1b[0;38;5;114m{line}" in out or f"\x1b[0;38;5;114mr\"\"\"line1" in out, \
+            f"line {line!r} lacks per-line SGR: {out!r}"
+    # Specifically: lines 2 and 3 must each start with the SGR after a newline.
+    assert "\n\x1b[0;38;5;114mline2" in out
+    assert "\n\x1b[0;38;5;114mline3" in out
+
+
+def test_multiline_bold_emits_sgr_on_each_line():
+    out = md.md2ansi("**bold\nstrong**")
+    assert "\x1b[0;1mbold" in out
+    assert "\n\x1b[0;1mstrong" in out
+
+
 # ─── End-to-end: design doc renders without exception ────────────────────────
 
 
