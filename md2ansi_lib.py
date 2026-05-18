@@ -249,7 +249,7 @@ def _m2a_fmt_list(m, name, current_style, context, state):
         if match:
             indent, marker, content = match.groups()
             level = len(indent.expandtabs(4)) // 2
-            bullet = "•" if marker in ("-", "*", "+") else marker
+            bullet = "·" if marker in ("-", "*", "+") else marker
             styled = _m2a_styled(bullet, current_style, "1")
             rendered = _md2ansi(content, current_style, M2A_CONTEXT_MD_INLINE, state)
             out_lines.append(f"{'  ' * level}{styled} {rendered}")
