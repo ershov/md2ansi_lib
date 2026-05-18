@@ -72,6 +72,20 @@ def test_inline_code():
     assert f"{ESC}0;38;5;114mx(){ESC}0m" in out
 
 
+def test_inline_code_spans_a_newline():
+    # Inline backtick span may cross a soft newline (CommonMark allows it);
+    # the run-away is stopped by the block-start lookahead.
+    out = strip_ansi(md.md2ansi("text `first line\nsecond line` after"))
+    assert "first line\nsecond line" in out
+
+
+def test_inline_code_stops_at_block_boundary():
+    # An unclosed backtick must NOT eat the following heading.
+    out = strip_ansi(md.md2ansi("text `open across\n\n# heading"))
+    assert "heading" in out
+    assert "`open across" in out      # left as literal text
+
+
 def test_link():
     out = md.md2ansi("[click](http://x)")
     assert f"{ESC}0;38;5;45;4mclick{ESC}0m" in out

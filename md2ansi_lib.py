@@ -487,7 +487,7 @@ _MD_FOOTNOTE_DEF = r"""
 
 _MD_FOOTNOTE_REF = r" \[ \^ (?P<*id> [^\]\n]+ ) \] "
 
-_MD_CODE_INLINE = r" ` (?P<*> [^`\n]+ ) ` "
+_MD_CODE_INLINE = rf" ` (?P<*> (?: [^`\n] | \n (?! {_BSA} ) )+ ) ` "
 
 _MD_IMAGE = r" ! \[ (?P<*alt> [^\]\n]* ) \] \( (?P<*url> [^)\n]* ) \) "
 
