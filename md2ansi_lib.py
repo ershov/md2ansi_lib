@@ -11,13 +11,26 @@ from dataclasses import dataclass, field
 
 # ### Section 1: SGR color constants ##########################################
 
-# Universal code-token palette.
 # Bare SGR codes — wrapping in `\x1b[...m` is the dispatcher's job.
-M2A_COLOR_COMMENT = "38;5;245"   # gray
-M2A_COLOR_STRING  = "38;5;114"   # green
-M2A_COLOR_NUMBER  = "38;5;220"   # yellow
-M2A_COLOR_KEYWORD = "38;5;204"   # pink
-M2A_COLOR_BUILTIN = "38;5;147"   # purple
+
+# Universal code-token palette.
+M2A_COLOR_COMMENT  = "38;5;245"   # gray
+M2A_COLOR_STRING   = "38;5;114"   # green
+M2A_COLOR_NUMBER   = "38;5;220"   # yellow
+M2A_COLOR_KEYWORD  = "38;5;204"   # pink
+M2A_COLOR_BUILTIN  = "38;5;147"   # purple
+
+# Markdown styling palette (headings, inline accents, frame chrome).
+M2A_COLOR_H1       = "38;5;226"   # yellow
+M2A_COLOR_H2       = "38;5;214"   # orange
+M2A_COLOR_H3       = "38;5;118"   # green
+M2A_COLOR_H4       = "38;5;21"    # blue
+M2A_COLOR_H5       = "38;5;93"    # purple
+M2A_COLOR_H6       = "38;5;239"   # dim gray
+M2A_COLOR_LINK     = "38;5;45;4"  # cyan + underline
+M2A_COLOR_DIM      = "38;5;245"   # blockquote bar, image label (same value as COMMENT — different intent)
+M2A_COLOR_FRAME    = "38;5;239"   # code-block frame corners (same value as H6 — different intent)
+M2A_COLOR_FOOTNOTE = "38;5;226"   # footnote ref + section heading
 
 
 # ### Section 2: Dataclasses ##################################################
@@ -113,17 +126,14 @@ def _m2a_build_context(rules):
 _M2A_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _m2a_fired_rule(m, context):
-    """Return the name of the rule whose outer named group matched."""
-    for name, _pat, _fmt, _recurse in context.rules:
-        if m.group(name) is not None:
-            return name
-    return None
-
-
 def _m2a_visible_len(s):
     """Length of s with ANSI escapes stripped — used for width calculations."""
     return len(_M2A_ANSI_ESCAPE_RE.sub("", s))
+
+
+def _m2a_prefix_lines(text, prefix):
+    """Prepend `prefix` to every line in `text`."""
+    return "\n".join(prefix + ln for ln in text.split("\n"))
 
 
 def _m2a_inject_color(text, style, reset=None):
@@ -152,31 +162,35 @@ def _m2a_inject_color(text, style, reset=None):
     return out
 
 
-def _m2a_fmt_hr(m, current_style, context, state):
+def _m2a_styled(text, current_style, sgr):
+    """Wrap `text` with SGR `sgr` layered on top of `current_style`, then reset back."""
+    return _m2a_inject_color(text, f"{current_style};{sgr}", current_style)
+
+
+def _m2a_fmt_hr(m, name, current_style, context, state):
     bar = "─" * max(1, state.line_width - 1)
     return _m2a_inject_color(bar, current_style, current_style)
 
 
-def _m2a_fmt_inline_code(m, current_style, context, state):
+def _m2a_fmt_inline_code(m, name, current_style, context, state):
     text = m.group(0).strip("`")
-    return _m2a_inject_color(text, f"{current_style};{M2A_COLOR_STRING}", current_style)
+    return _m2a_styled(text, current_style, M2A_COLOR_STRING)
 
 
-def _m2a_fmt_image(m, current_style, context, state):
-    name = _m2a_fired_rule(m, context)
+def _m2a_fmt_image(m, name, current_style, context, state):
     alt = m.group(f"{name}_alt") or ""
-    return _m2a_inject_color(f"[IMG: {alt}]", f"{current_style};3;38;5;245", current_style)
+    return _m2a_styled(f"[IMG: {alt}]", current_style, f"3;{M2A_COLOR_DIM}")
 
 
-def _m2a_fmt_blockquote(m, current_style, context, state):
+def _m2a_fmt_blockquote(m, name, current_style, context, state):
     text = m.group(0)
     stripped = "\n".join(re.sub(r"^>[ \t]?", "", ln) for ln in text.split("\n"))
     inner = _md2ansi(stripped, current_style, M2A_CONTEXT_MD_INLINE, state)
-    bar = _m2a_inject_color("│", f"{current_style};38;5;245", current_style) + " "
-    return "\n".join(bar + ln for ln in inner.split("\n"))
+    bar = _m2a_styled("│", current_style, M2A_COLOR_DIM) + " "
+    return _m2a_prefix_lines(inner, bar)
 
 
-def _m2a_fmt_table(m, current_style, context, state):
+def _m2a_fmt_table(m, name, current_style, context, state):
     raw_rows = []
     for ln in m.group(0).strip("\n").split("\n"):
         s = ln.strip()
@@ -227,7 +241,7 @@ def _m2a_fmt_table(m, current_style, context, state):
     return "\n".join(out_lines)
 
 
-def _m2a_fmt_list(m, current_style, context, state):
+def _m2a_fmt_list(m, name, current_style, context, state):
     out_lines = []
     for ln in m.group(0).split("\n"):
         match = re.match(r"^([ \t]*)([-*+]|\d+\.)[ \t]+(.*)$", ln)
@@ -235,7 +249,7 @@ def _m2a_fmt_list(m, current_style, context, state):
             indent, marker, content = match.groups()
             level = len(indent.expandtabs(4)) // 2
             bullet = "•" if marker in ("-", "*", "+") else marker
-            styled = _m2a_inject_color(bullet, f"{current_style};1", current_style)
+            styled = _m2a_styled(bullet, current_style, "1")
             rendered = _md2ansi(content, current_style, M2A_CONTEXT_MD_INLINE, state)
             out_lines.append(f"{'  ' * level}{styled} {rendered}")
         else:
@@ -243,8 +257,7 @@ def _m2a_fmt_list(m, current_style, context, state):
     return "\n".join(out_lines)
 
 
-def _m2a_fmt_footnote_def(m, current_style, context, state):
-    name = _m2a_fired_rule(m, context)
+def _m2a_fmt_footnote_def(m, name, current_style, context, state):
     fid = m.group(f"{name}_id")
     text = m.group(f"{name}_text")
     # Collapse continuation lines (per the multi-line pattern).
@@ -253,12 +266,11 @@ def _m2a_fmt_footnote_def(m, current_style, context, state):
     return ""
 
 
-def _m2a_fmt_footnote_ref(m, current_style, context, state):
-    name = _m2a_fired_rule(m, context)
+def _m2a_fmt_footnote_ref(m, name, current_style, context, state):
     fid = m.group(f"{name}_id")
     if fid not in state.footnote_order:
         state.footnote_order.append(fid)
-    return _m2a_inject_color(f"[^{fid}]", f"{current_style};38;5;226", current_style)
+    return _m2a_styled(f"[^{fid}]", current_style, M2A_COLOR_FOOTNOTE)
 
 
 def _m2a_render_footnotes(state, current_style):
@@ -266,15 +278,14 @@ def _m2a_render_footnotes(state, current_style):
     entries = [(fid, state.footnotes[fid]) for fid in state.footnote_order if fid in state.footnotes]
     if not entries:
         return ""
-    out = ["", _m2a_inject_color("Footnotes:", f"{current_style};1", current_style)]
+    out = ["", _m2a_styled("Footnotes:", current_style, "1")]
     for fid, text in entries:
-        ref = _m2a_inject_color(f"[^{fid}]", f"{current_style};38;5;226", current_style)
+        ref = _m2a_styled(f"[^{fid}]", current_style, M2A_COLOR_FOOTNOTE)
         out.append(f"  {ref} {text}")
     return "\n".join(out) + "\n"
 
 
-def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
-    name = _m2a_fired_rule(m, context)
+def _m2a_fmt_code(m, name, current_style, context, state, code_context, lang=None):
     body = m.group(f"{name}_body")
     indent = m.group(f"{name}_indent") or ""
     if lang is None:
@@ -299,11 +310,11 @@ def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
     right_dashes = inner - 4 - len(label)
     top_text = f"┌── {label} {'─' * right_dashes}┐"
     bot_text = f"└{'─' * inner}┘"
-    top = _m2a_inject_color(top_text, f"{current_style};38;5;239", current_style)
-    bot = _m2a_inject_color(bot_text, f"{current_style};38;5;239", current_style)
+    top = _m2a_styled(top_text, current_style, M2A_COLOR_FRAME)
+    bot = _m2a_styled(bot_text, current_style, M2A_COLOR_FRAME)
     # One-space indent inside the frame (frame's left corner sits at col 0 of
     # frame-local coordinates).
-    indented = "\n".join(" " + ln for ln in rendered.split("\n"))
+    indented = _m2a_prefix_lines(rendered, " ")
     # `body` capture includes the final content line's terminator, so `indented`
     # usually ends with " " (a trailing indented empty line) — strip that one
     # space so the closing rail sits flush below the last content line.
@@ -314,7 +325,7 @@ def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
     # Re-apply the source indent to every output line so a code block nested
     # inside a list/quote keeps its column.
     if indent:
-        framed = "\n".join(indent + ln for ln in framed.split("\n"))
+        framed = _m2a_prefix_lines(framed, indent)
     return framed
 
 
@@ -447,26 +458,17 @@ _MD_H6 = r"^ \#{6} [ \t]+ (?P<*> [^\n]+ ) $"
 _MD_HR = r"^ (?: -{3,} | ={3,} | _{3,} ) [ \t]* $"
 
 # Fenced code blocks — tempered-greedy body so each char has one matching branch.
-_MD_CODE_PY = r"""
-    ^ (?P<*indent> [ \t]* ) ``` [ \t]* python [ \t]* \n
-    (?P<*body> (?: (?! ^ [ \t]* ``` [ \t]* $ ) [\s\S] )* )
-    ^ [ \t]* ``` [ \t]* $
-"""
-_MD_CODE_BASH = r"""
-    ^ (?P<*indent> [ \t]* ) ``` [ \t]* (?:bash|sh) [ \t]* \n
-    (?P<*body> (?: (?! ^ [ \t]* ``` [ \t]* $ ) [\s\S] )* )
-    ^ [ \t]* ``` [ \t]* $
-"""
-_MD_CODE_JS = r"""
-    ^ (?P<*indent> [ \t]* ) ``` [ \t]* (?:javascript|js) [ \t]* \n
-    (?P<*body> (?: (?! ^ [ \t]* ``` [ \t]* $ ) [\s\S] )* )
-    ^ [ \t]* ``` [ \t]* $
-"""
-_MD_CODE_GEN = r"""
-    ^ (?P<*indent> [ \t]* ) (?:```|~~~) (?P<*lang> \w* ) [ \t]* \n
-    (?P<*body> (?: (?! ^ [ \t]* (?:```|~~~) [ \t]* $ ) [\s\S] )* )
-    ^ [ \t]* (?:```|~~~) [ \t]* $
-"""
+def _fenced(tag, fence=r"```"):
+    return rf"""
+        ^ (?P<*indent> [ \t]* ) {fence} [ \t]* {tag} [ \t]* \n
+        (?P<*body> (?: (?! ^ [ \t]* {fence} [ \t]* $ ) [\s\S] )* )
+        ^ [ \t]* {fence} [ \t]* $
+    """
+
+_MD_CODE_PY   = _fenced("python")
+_MD_CODE_BASH = _fenced(r"(?:bash|sh)")
+_MD_CODE_JS   = _fenced(r"(?:javascript|js)")
+_MD_CODE_GEN  = _fenced(r"(?P<*lang> \w* )", fence=r"(?:```|~~~)")
 
 _MD_BLOCKQUOTE = r"^ > [ \t]? [^\n]* (?: \n > [ \t]? [^\n]* )*"
 
@@ -534,7 +536,7 @@ _MD_ITALIC = rf"""
 # language-specific code block. The generic block passes lang=None so the
 # handler reads it from the pattern's captured `_lang` group.
 def _m2a_code_lambda(code_ctx, lang=None):
-    return lambda m, cs, ctx, st: _m2a_fmt_code(m, cs, ctx, st, code_ctx, lang)
+    return lambda m, name, cs, ctx, st: _m2a_fmt_code(m, name, cs, ctx, st, code_ctx, lang)
 
 # Inline rules — used to build M2A_CONTEXT_MD_INLINE (where _M2A_RECURSE_SELF
 # resolves to INLINE itself), and reused inside _M2A_RULES_MD after rebinding
@@ -544,7 +546,7 @@ def _m2a_code_lambda(code_ctx, lang=None):
 _M2A_RULES_INLINE_RAW = (
     ("code_inline",   _MD_CODE_INLINE,  _m2a_fmt_inline_code,  None),
     ("image",         _MD_IMAGE,        _m2a_fmt_image,        None),
-    ("link",          _MD_LINK,         "38;5;45;4",           _M2A_RECURSE_SELF),
+    ("link",          _MD_LINK,         M2A_COLOR_LINK,        _M2A_RECURSE_SELF),
     ("bolditalic",    _MD_BOLDITALIC,   "1;3",                 _M2A_RECURSE_SELF),
     ("bold_under",    _MD_BOLD_UNDER,   "1;3",                 _M2A_RECURSE_SELF),
     ("under_bold",    _MD_UNDER_BOLD,   "1;3",                 _M2A_RECURSE_SELF),
@@ -562,12 +564,12 @@ _M2A_RULES_INLINE_IN_MD = tuple(
 )
 
 _M2A_RULES_MD = (
-    ("h1",            _MD_H1,           "38;5;226",                                   M2A_CONTEXT_MD_INLINE),
-    ("h2",            _MD_H2,           "38;5;214",                                   M2A_CONTEXT_MD_INLINE),
-    ("h3",            _MD_H3,           "38;5;118",                                   M2A_CONTEXT_MD_INLINE),
-    ("h4",            _MD_H4,           "38;5;21",                                    M2A_CONTEXT_MD_INLINE),
-    ("h5",            _MD_H5,           "38;5;93",                                    M2A_CONTEXT_MD_INLINE),
-    ("h6",            _MD_H6,           "38;5;239",                                   M2A_CONTEXT_MD_INLINE),
+    ("h1",            _MD_H1,           M2A_COLOR_H1,                                 M2A_CONTEXT_MD_INLINE),
+    ("h2",            _MD_H2,           M2A_COLOR_H2,                                 M2A_CONTEXT_MD_INLINE),
+    ("h3",            _MD_H3,           M2A_COLOR_H3,                                 M2A_CONTEXT_MD_INLINE),
+    ("h4",            _MD_H4,           M2A_COLOR_H4,                                 M2A_CONTEXT_MD_INLINE),
+    ("h5",            _MD_H5,           M2A_COLOR_H5,                                 M2A_CONTEXT_MD_INLINE),
+    ("h6",            _MD_H6,           M2A_COLOR_H6,                                 M2A_CONTEXT_MD_INLINE),
     ("hr",            _MD_HR,           _m2a_fmt_hr,                                  None),
     ("code_python",   _MD_CODE_PY,      _m2a_code_lambda(M2A_CONTEXT_CODE_PYTHON,     "python"),     None),
     ("code_bash",     _MD_CODE_BASH,    _m2a_code_lambda(M2A_CONTEXT_CODE_BASH,       "bash"),       None),
@@ -601,7 +603,7 @@ def _md2ansi(text, current_style, context, state):
                         inner = m.group(0)
                     return _m2a_inject_color(inner, new_style, current_style)
                 case _ as func:
-                    return func(m, current_style, context, state)
+                    return func(m, name, current_style, context, state)
         return m.group(0)
     return context.compiled.sub(_m2a_replace, text)
 
