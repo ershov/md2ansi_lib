@@ -9,10 +9,10 @@ import re
 from dataclasses import dataclass, field
 
 
-# ─── Section 1: SGR color constants ──────────────────────────────────────────
+# ### Section 1: SGR color constants ##########################################
 
-# Universal code-token palette (design §7.3). Bare SGR codes — wrapping in
-# `\x1b[...m` is the dispatcher's job.
+# Universal code-token palette.
+# Bare SGR codes — wrapping in `\x1b[...m` is the dispatcher's job.
 M2A_COLOR_COMMENT = "38;5;245"   # gray
 M2A_COLOR_STRING  = "38;5;114"   # green
 M2A_COLOR_NUMBER  = "38;5;220"   # yellow
@@ -20,9 +20,7 @@ M2A_COLOR_KEYWORD = "38;5;204"   # pink
 M2A_COLOR_BUILTIN = "38;5;147"   # purple
 
 
-# ─── Section 2: Dataclasses ──────────────────────────────────────────────────
-
-# Design §5.1.
+# ### Section 2: Dataclasses ##################################################
 
 @dataclass(frozen=True, slots=True)
 class M2A_Context:
@@ -37,9 +35,9 @@ class M2A_DocumentState:
     footnote_order: list = field(default_factory=list)
 
 
-# ─── Section 3: Shared regex fragments ───────────────────────────────────────
+# ### Section 3: Shared regex fragments #######################################
 
-# Design §6.2 and §7.2. All fragments are designed to be embedded inside
+# All fragments are designed to be embedded inside
 # re.VERBOSE patterns (whitespace ignored outside character classes; `#` is
 # a comment unless escaped).
 
@@ -80,9 +78,9 @@ _M2A_BLOCK_START_AHEAD = r"""
 """
 
 
-# ─── Section 4: Context-building utility ─────────────────────────────────────
+# ### Section 4: Context-building utility #####################################
 
-# Design §5.3. The placeholder rewrite covers both group definitions (`<`-form)
+# The placeholder rewrite covers both group definitions (`<`-form)
 # and backreferences (`=`-form); the trailing `>` or `)` is left alone since
 # we only insert the rulename prefix.
 _M2A_PLACEHOLDER_RE = re.compile(r"\(\?P(?P<kind>[<=])\*(?P<suffix>\w*)")
@@ -107,7 +105,7 @@ def _m2a_build_context(rules):
     return M2A_Context(compiled=compiled, rules=rules)
 
 
-# ─── Section 5: Callable formatters ──────────────────────────────────────────
+# ### Section 5: Callable formatters ##########################################
 
 # These reference M2A_CONTEXT_MD and _md2ansi which are defined later in the
 # file. Forward references resolve at call time — fine for function bodies.
@@ -320,11 +318,15 @@ def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
     return framed
 
 
-# ─── Section 6: Rule tables ──────────────────────────────────────────────────
+# ### Section 6: Rule tables ##################################################
 
-# Each rule is a 4-tuple: (name, pattern, fmt, recurse) — see design §5.1.
+# Rules are 4-tuples: `(name, pattern, fmt, recurse)` where:
+# - `name` — str identifier (drives `(?P<name>...)` outer group and `(?P<*...>)` rewrite)
+# - `pattern` — regex source (`re.VERBOSE` mode)
+# - `fmt` — either an SGR-codes string (e.g., `"1;3"`) or a callable `(match, current_style, context, state) → str`
+# - `recurse` — `M2A_Context` to recurse content into, or `None` to leave content as a literal
 
-# Python keyword & builtin lists per design §7.4. `type` appears in both lists;
+# Python keyword & builtin lists. `type` appears in both lists;
 # rule order ensures keyword wins.
 _M2A_PY_KEYWORDS = (
     "False|None|True|and|as|assert|async|await|break|case|class|continue|def|del|"
@@ -347,7 +349,7 @@ _M2A_PY_BUILTINS = (
 # Each fragment is wrapped in its own `(?:...)` so its internal alternation
 # (e.g. `[^"\\\n] | \\.`) cannot interact with the outer `|` chain.
 # Triple-quoted alternatives come first so `"""..."""` never matches as `""` + DQ.
-# TODO: highlight {…} interpolation inside f-strings (design §7.2 deferred extension).
+# TODO: highlight {…} interpolation inside f-strings (deferred extension).
 _M2A_PY_STRING = rf"""
     (?: \b [rRbBuUfF]{{1,2}} )?
     (?:
@@ -359,7 +361,7 @@ _M2A_PY_STRING = rf"""
 """
 
 _M2A_RULES_CODE_PYTHON = (
-    # Use [^\n] not . because re.DOTALL is set globally; design §6.1.
+    # Use [^\n] not . because re.DOTALL is set globally.
     ("py_comment",    r"\#[^\n]*",                                    M2A_COLOR_COMMENT, None),
     ("py_string",     _M2A_PY_STRING,                                 M2A_COLOR_STRING,  None),
     ("py_number",     _M2A_NUM,                                       M2A_COLOR_NUMBER,  None),
@@ -367,7 +369,7 @@ _M2A_RULES_CODE_PYTHON = (
     ("py_builtin",    rf"\b(?:{_M2A_PY_BUILTINS})\b",                 M2A_COLOR_BUILTIN, None),
 )
 
-# Bash keyword & builtin lists per design §7.5.
+# Bash keyword & builtin lists.
 _M2A_SH_KEYWORDS = (
     "if|then|else|elif|fi|case|esac|for|while|until|do|done|in|function|time|"
     "select|break|continue|return|declare|readonly|local|export|set|unset|shift|"
@@ -391,7 +393,7 @@ _M2A_RULES_CODE_BASH = (
     ("sh_builtin",   rf"\b(?:{_M2A_SH_BUILTINS})\b",                M2A_COLOR_BUILTIN, None),
 )
 
-# JavaScript keyword & builtin lists per design §7.6.
+# JavaScript keyword & builtin lists.
 _M2A_JS_KEYWORDS = (
     "break|case|catch|class|const|continue|debugger|default|delete|do|else|export|"
     "extends|false|finally|for|function|if|import|in|instanceof|new|null|return|"
@@ -420,7 +422,7 @@ _M2A_RULES_CODE_JAVASCRIPT = (
 _M2A_RULES_CODE_GENERIC = ()
 
 
-# ─── Section 7: Compiled contexts ────────────────────────────────────────────
+# ### Section 7: Compiled contexts ############################################
 
 M2A_CONTEXT_CODE_PYTHON     = _m2a_build_context(_M2A_RULES_CODE_PYTHON)
 M2A_CONTEXT_CODE_BASH       = _m2a_build_context(_M2A_RULES_CODE_BASH)
@@ -428,10 +430,10 @@ M2A_CONTEXT_CODE_JAVASCRIPT = _m2a_build_context(_M2A_RULES_CODE_JAVASCRIPT)
 M2A_CONTEXT_CODE_GENERIC    = _m2a_build_context(_M2A_RULES_CODE_GENERIC)
 
 
-# ─── Section 6 (cont.): Markdown rule table ──────────────────────────────────
+# ### Section 6 (cont.): Markdown rule table ##################################
 
 # Inline patterns embed _M2A_BLOCK_START_AHEAD via f-string substitution so the
-# soft-newline branch stops at block boundaries (design §6.2).
+# soft-newline branch stops at block boundaries.
 _BSA = _M2A_BLOCK_START_AHEAD
 
 # Headings — exact-count `#` followed by space ensures mutual exclusion.
@@ -580,9 +582,7 @@ _M2A_RULES_MD = (
 M2A_CONTEXT_MD = _m2a_build_context(_M2A_RULES_MD)
 
 
-# ─── Section 8: Internal _md2ansi() and replace dispatcher ───────────────────
-
-# Design §5.4.
+# ### Section 8: Internal _md2ansi() and replace dispatcher ###################
 
 def _md2ansi(text, current_style, context, state):
     def _m2a_replace(m):
@@ -606,10 +606,9 @@ def _md2ansi(text, current_style, context, state):
     return context.compiled.sub(_m2a_replace, text)
 
 
-# ─── Section 9: Public md2ansi() entry point ─────────────────────────────────
+# ### Section 9: Public md2ansi() entry point #################################
 
-# Design §5.5. Footnote rendering is wired in once `_m2a_render_footnotes` and
-# `M2A_CONTEXT_MD` exist (Phase 5).
+# Footnote rendering is wired in once `_m2a_render_footnotes` and `M2A_CONTEXT_MD` exist (Phase 5).
 
 def md2ansi(text, current_style="0", line_width=80):
     """Convert Markdown text to ANSI-colored output."""
