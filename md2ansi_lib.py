@@ -611,11 +611,107 @@ def _md2ansi(text, current_style, context, state):
 
 # ### Section: Public md2ansi() entry point #################################
 
-# Footnote rendering is wired in once `_m2a_render_footnotes` and `M2A_CONTEXT_MD` exist (Phase 5).
+# Line-wrapping helpers — applied to source by `md2ansi` before markdown
+# processing when line_width > 0. Wrapping is intentionally NOT done inside
+# `_md2ansi` because the dispatcher calls itself recursively; we want to wrap
+# once at the top.
 
-def md2ansi(text, current_style="0", line_width=80):
-    """Convert Markdown text to ANSI-colored output."""
-    state = M2A_DocumentState(line_width=line_width)
+
+def _m2a_continuation_indent(line):
+    """Compute the prefix to prepend to wrapped continuation lines so that
+    the resulting block still parses as the same markdown construct.
+
+    - Blockquote (`^[> ]*>`): copy the leading `>`/space run verbatim.
+    - List item (`-`, `*`, `+`, `N.`): leading whitespace + 2 spaces.
+    - Paragraph: leading whitespace only.
+    """
+    if re.match(r"^[> ]*>", line):
+        return re.match(r"^[> ]*", line).group(0)
+    m = re.match(r"^([ \t]*)(?:[-*+]|\d+\.)[ \t]+", line)
+    if m:
+        return m.group(1) + "  "
+    return re.match(r"^[ \t]*", line).group(0)
+
+
+def _m2a_wrap_line(line, line_width, continuation):
+    """Greedy word-wrap with a no-break zone: don't break while the current
+    line still has more than 30 chars of room. Long single words may overflow.
+    """
+    if len(line) <= line_width:
+        return [line]
+    threshold = max(0, line_width - 30)
+    tokens = re.findall(r"\s+|\S+", line)
+    if not tokens:
+        return [line]
+    lines = []
+    current = ""
+    pending_ws = ""
+    for tok in tokens:
+        if tok[0].isspace():
+            pending_ws = tok
+            continue
+        attempt = current + pending_ws + tok
+        if not current:
+            current = attempt
+        elif len(attempt) <= line_width:
+            current = attempt
+        elif len(current) < threshold:
+            # Still in no-break zone — attach even though it overflows.
+            current = attempt
+        else:
+            lines.append(current)
+            current = continuation + tok
+        pending_ws = ""
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _m2a_wrap_source(text, line_width):
+    """Pre-pass over raw source: wrap long paragraph / list / blockquote
+    lines. Skip tables (TODO: cell-aware wrap), code blocks, headings,
+    footnote-def lines.
+    """
+    if line_width <= 0:
+        return text
+    out = []
+    in_code = False
+    for ln in text.split("\n"):
+        # Code-fence toggle — anything inside is left verbatim.
+        if re.match(r"^[ \t]*(```|~~~)", ln):
+            in_code = not in_code
+            out.append(ln)
+            continue
+        if in_code:
+            out.append(ln)
+            continue
+        # Skip: tables, headings, footnote definitions.
+        if (re.match(r"^[ \t]*\|", ln)
+                or re.match(r"^[ \t]*#{1,6}[ \t]+", ln)
+                or re.match(r"^\[\^[^\]]+\]:", ln)):
+            # TODO: cell-aware table wrapping.
+            out.append(ln)
+            continue
+        if len(ln) <= line_width:
+            out.append(ln)
+            continue
+        out.extend(_m2a_wrap_line(ln, line_width, _m2a_continuation_indent(ln)))
+    return "\n".join(out)
+
+
+def md2ansi(text, current_style="0", line_width=0):
+    """Convert Markdown text to ANSI-colored output.
+
+    `line_width` > 0 enables source-level word wrapping for paragraphs, lists,
+    and blockquotes. It's also the width used by `_m2a_fmt_hr`. When 0 (the
+    default) no wrapping happens and HR falls back to a 150-char bar.
+    """
+    if line_width > 0:
+        text = _m2a_wrap_source(text, line_width)
+        state_lw = line_width
+    else:
+        state_lw = 150
+    state = M2A_DocumentState(line_width=state_lw)
     out = _md2ansi(text, current_style, M2A_CONTEXT_MD, state)
     if state.footnote_order:
         out += _m2a_render_footnotes(state, current_style)

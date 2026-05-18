@@ -141,11 +141,10 @@ def test_table_cells_recurse_inline():
 
 def test_list_mixed_markers_and_nesting():
     out = md.md2ansi("- one\n* two\n  - nested\n1. ord")
-    assert "•" in out                                    # bullets
+    assert "·" in out                                    # bullets
     assert "1." in out                                   # ordered marker preserved
-    # Nested bullet appears indented by two spaces (one level).
     plain = strip_ansi(out)
-    assert re.search(r"\n  • nested", plain)
+    assert re.search(r"\n  · nested", plain)
 
 
 def test_list_recurses_inline():
@@ -403,6 +402,106 @@ def test_multiline_bold_emits_sgr_on_each_line():
     out = md.md2ansi("**bold\nstrong**")
     assert "\x1b[0;1mbold" in out
     assert "\n\x1b[0;1mstrong" in out
+
+
+# ─── Line wrapping ───────────────────────────────────────────────────────────
+
+
+def test_default_line_width_disables_wrapping():
+    long_para = "word " * 100
+    out = strip_ansi(md.md2ansi(long_para))
+    assert "\n" not in out.rstrip()  # entire paragraph stays on one line
+
+
+def test_wrap_paragraph_at_word_boundary():
+    src = "This is a long paragraph that needs to be wrapped at some sensible boundary."
+    out = strip_ansi(md.md2ansi(src, line_width=30))
+    for line in out.splitlines():
+        # Each wrapped line should be ≤ width or contain a single long word.
+        assert len(line) <= 30 or len(line.split()) == 1
+
+
+def test_no_break_zone_under_threshold():
+    # line_width=80 → threshold=50. A line at 40 chars with a 100-char word
+    # following should NOT break (we're below threshold); the long word
+    # overflows on a single line.
+    src = "short prefix " + "x" * 100
+    out = strip_ansi(md.md2ansi(src, line_width=80))
+    assert out.strip() == src.strip()      # no break inserted
+
+
+def test_break_above_threshold():
+    # Same overflow scenario but the line was already past threshold (≥50).
+    src = ("word " * 12).strip() + " hugewordthatoverflows"
+    out = strip_ansi(md.md2ansi(src, line_width=80))
+    assert "\n" in out                     # break inserted
+
+
+def test_wrap_skips_code_block():
+    src = "```\n" + "long line of code that exceeds the line width by quite a margin indeed\n" + "```"
+    plain = strip_ansi(md.md2ansi(src, line_width=30))
+    # Find the body line — it must still be one line, not wrapped.
+    body_lines = [ln for ln in plain.splitlines() if "long line of code" in ln]
+    assert len(body_lines) == 1
+
+
+def test_wrap_skips_table():
+    src = "| long cell content that would normally wrap if not protected | b |"
+    out = strip_ansi(md.md2ansi(src, line_width=30))
+    # Single source line → still single line in output (other than borders).
+    table_lines = [ln for ln in out.splitlines() if "long cell content" in ln]
+    assert len(table_lines) == 1
+
+
+def test_wrap_skips_heading():
+    src = "# A really long heading that exceeds the line width but should not be wrapped"
+    out = strip_ansi(md.md2ansi(src, line_width=30))
+    # Should stay on one line.
+    matching = [ln for ln in out.splitlines() if "really long heading" in ln]
+    assert len(matching) == 1
+
+
+def test_wrap_skips_footnote_def():
+    # If the def line were wrapped it would split into "[^a]: ..." plus a
+    # plain continuation line that the def rule wouldn't capture — so the
+    # rendered Footnotes section would lose half the text.
+    src = "Ref[^a].\n\n[^a]: A footnote definition with content longer than the wrap width here."
+    out = strip_ansi(md.md2ansi(src, line_width=30))
+    assert "A footnote definition with content longer than the wrap width here." in out
+
+
+def test_wrap_list_hanging_indent_plus_two():
+    src = "- A list item with quite a bit of content that should wrap"
+    out = strip_ansi(md.md2ansi(src, line_width=30))
+    lines = out.splitlines()
+    # First wrapped line starts with the bullet; later wrapped lines indent +2.
+    assert lines[0].startswith("·")
+    for ln in lines[1:]:
+        assert ln.startswith("  "), repr(ln)
+
+
+def test_wrap_nested_list_hanging_indent_plus_two():
+    src = "  - Nested list item with text that goes beyond the line width and wraps"
+    out = strip_ansi(md.md2ansi(src, line_width=30))
+    lines = out.splitlines()
+    # Source indent (2) + 2 = 4-char continuation indent.
+    assert lines[0].startswith("  ·")
+    for ln in lines[1:]:
+        assert ln.startswith("    "), repr(ln)
+
+
+def test_wrap_blockquote_preserves_marker_prefix():
+    src = "> A blockquote with content long enough that it needs to wrap into multiple lines."
+    out = strip_ansi(md.md2ansi(src, line_width=30))
+    # Every output line of the quote should start with the styled bar.
+    for ln in out.splitlines():
+        if ln.strip():
+            assert ln.startswith("│"), repr(ln)
+
+
+def test_hr_uses_150_fallback_when_no_width():
+    out = strip_ansi(md.md2ansi("---"))
+    assert "─" * 149 in out
 
 
 # ─── End-to-end: design doc renders without exception ────────────────────────
