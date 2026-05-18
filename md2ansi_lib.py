@@ -145,7 +145,7 @@ def _m2a_fmt_image(m, current_style, context, state):
 def _m2a_fmt_blockquote(m, current_style, context, state):
     text = m.group(0)
     stripped = "\n".join(re.sub(r"^>[ \t]?", "", ln) for ln in text.split("\n"))
-    inner = _md2ansi(stripped, current_style, M2A_CONTEXT_MD, state)
+    inner = _md2ansi(stripped, current_style, M2A_CONTEXT_MD_INLINE, state)
     bar = f"\x1b[{current_style};38;5;245m│\x1b[{current_style}m "
     return "\n".join(bar + ln for ln in inner.split("\n"))
 
@@ -174,8 +174,8 @@ def _m2a_fmt_table(m, current_style, context, state):
 
     header = pad(header)
     body = [pad(r) for r in body]
-    rendered_header = [_md2ansi(c, current_style, M2A_CONTEXT_MD, state) for c in header]
-    rendered_body = [[_md2ansi(c, current_style, M2A_CONTEXT_MD, state) for c in r] for r in body]
+    rendered_header = [_md2ansi(c, current_style, M2A_CONTEXT_MD_INLINE, state) for c in header]
+    rendered_body = [[_md2ansi(c, current_style, M2A_CONTEXT_MD_INLINE, state) for c in r] for r in body]
     widths = [
         max(
             _m2a_visible_len(rendered_header[i]),
@@ -210,7 +210,7 @@ def _m2a_fmt_list(m, current_style, context, state):
             level = len(indent.expandtabs(4)) // 2
             bullet = "•" if marker in ("-", "*", "+") else marker
             styled = f"\x1b[{current_style};1m{bullet}\x1b[{current_style}m"
-            rendered = _md2ansi(content, current_style, M2A_CONTEXT_MD, state)
+            rendered = _md2ansi(content, current_style, M2A_CONTEXT_MD_INLINE, state)
             out_lines.append(f"{'  ' * level}{styled} {rendered}")
         else:
             out_lines.append(ln)
@@ -456,13 +456,38 @@ _MD_ITALIC = rf"""
 def _m2a_code_lambda(code_ctx):
     return lambda m, cs, ctx, st: _m2a_fmt_code(m, cs, ctx, st, code_ctx)
 
+# Inline rules — used to build M2A_CONTEXT_MD_INLINE (where _M2A_RECURSE_SELF
+# resolves to INLINE itself), and reused inside _M2A_RULES_MD after rebinding
+# the sentinel to the now-built INLINE context. Block-level matches recurse
+# into INLINE so heading/quote/cell text never re-triggers block rules
+# (otherwise "1. Goals" inside `## 1. Goals` would render as a list).
+_M2A_RULES_INLINE_RAW = (
+    ("code_inline",   _MD_CODE_INLINE,  _m2a_fmt_inline_code,  None),
+    ("image",         _MD_IMAGE,        _m2a_fmt_image,        None),
+    ("link",          _MD_LINK,         "38;5;45;4",           _M2A_RECURSE_SELF),
+    ("bolditalic",    _MD_BOLDITALIC,   "1;3",                 _M2A_RECURSE_SELF),
+    ("bold_under",    _MD_BOLD_UNDER,   "1;3",                 _M2A_RECURSE_SELF),
+    ("under_bold",    _MD_UNDER_BOLD,   "1;3",                 _M2A_RECURSE_SELF),
+    ("bold",          _MD_BOLD,         "1",                   _M2A_RECURSE_SELF),
+    ("strike",        _MD_STRIKE,       "9",                   _M2A_RECURSE_SELF),
+    ("italic",        _MD_ITALIC,       "3",                   _M2A_RECURSE_SELF),
+    ("footnote_ref",  _MD_FOOTNOTE_REF, _m2a_fmt_footnote_ref, None),
+)
+M2A_CONTEXT_MD_INLINE = _m2a_build_context(_M2A_RULES_INLINE_RAW)
+
+# Rebind sentinel to INLINE for the full MD rule table.
+_M2A_RULES_INLINE_IN_MD = tuple(
+    (name, pat, fmt, M2A_CONTEXT_MD_INLINE if recurse is _M2A_RECURSE_SELF else recurse)
+    for name, pat, fmt, recurse in _M2A_RULES_INLINE_RAW
+)
+
 _M2A_RULES_MD = (
-    ("h1",            _MD_H1,           "38;5;226",                                   _M2A_RECURSE_SELF),
-    ("h2",            _MD_H2,           "38;5;214",                                   _M2A_RECURSE_SELF),
-    ("h3",            _MD_H3,           "38;5;118",                                   _M2A_RECURSE_SELF),
-    ("h4",            _MD_H4,           "38;5;21",                                    _M2A_RECURSE_SELF),
-    ("h5",            _MD_H5,           "38;5;93",                                    _M2A_RECURSE_SELF),
-    ("h6",            _MD_H6,           "38;5;239",                                   _M2A_RECURSE_SELF),
+    ("h1",            _MD_H1,           "38;5;226",                                   M2A_CONTEXT_MD_INLINE),
+    ("h2",            _MD_H2,           "38;5;214",                                   M2A_CONTEXT_MD_INLINE),
+    ("h3",            _MD_H3,           "38;5;118",                                   M2A_CONTEXT_MD_INLINE),
+    ("h4",            _MD_H4,           "38;5;21",                                    M2A_CONTEXT_MD_INLINE),
+    ("h5",            _MD_H5,           "38;5;93",                                    M2A_CONTEXT_MD_INLINE),
+    ("h6",            _MD_H6,           "38;5;239",                                   M2A_CONTEXT_MD_INLINE),
     ("hr",            _MD_HR,           _m2a_fmt_hr,                                  None),
     ("code_python",   _MD_CODE_PY,      _m2a_code_lambda(M2A_CONTEXT_CODE_PYTHON),    None),
     ("code_bash",     _MD_CODE_BASH,    _m2a_code_lambda(M2A_CONTEXT_CODE_BASH),      None),
@@ -472,17 +497,7 @@ _M2A_RULES_MD = (
     ("table",         _MD_TABLE,        _m2a_fmt_table,                               None),
     ("list",          _MD_LIST,         _m2a_fmt_list,                                None),
     ("footnote_def",  _MD_FOOTNOTE_DEF, _m2a_fmt_footnote_def,                        None),
-    ("code_inline",   _MD_CODE_INLINE,  _m2a_fmt_inline_code,                         None),
-    ("image",         _MD_IMAGE,        _m2a_fmt_image,                               None),
-    ("link",          _MD_LINK,         "38;5;45;4",                                  _M2A_RECURSE_SELF),
-    ("bolditalic",    _MD_BOLDITALIC,   "1;3",                                        _M2A_RECURSE_SELF),
-    ("bold_under",    _MD_BOLD_UNDER,   "1;3",                                        _M2A_RECURSE_SELF),
-    ("under_bold",    _MD_UNDER_BOLD,   "1;3",                                        _M2A_RECURSE_SELF),
-    ("bold",          _MD_BOLD,         "1",                                          _M2A_RECURSE_SELF),
-    ("strike",        _MD_STRIKE,       "9",                                          _M2A_RECURSE_SELF),
-    ("italic",        _MD_ITALIC,       "3",                                          _M2A_RECURSE_SELF),
-    ("footnote_ref",  _MD_FOOTNOTE_REF, _m2a_fmt_footnote_ref,                        None),
-)
+) + _M2A_RULES_INLINE_IN_MD
 
 M2A_CONTEXT_MD = _m2a_build_context(_M2A_RULES_MD)
 
