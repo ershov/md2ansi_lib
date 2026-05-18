@@ -280,14 +280,28 @@ _M2A_PY_BUILTINS = (
     "slice|sorted|staticmethod|str|sum|super|tuple|type|vars|zip|__import__"
 )
 
-# TODO: highlight interpolation inside f-strings (design §7.2 deferred extension).
+# Python string with optional prefix: r/R, b/B, u/U, f/F, plus 2-char combos
+# (rb, br, fr, rf, ...). The prefix is anchored at a word boundary so it can't
+# attach to the tail of an identifier (`foor"x"` keeps `r` as part of `foor`,
+# only `"x"` is matched). Empty prefix is allowed via the outer `?`.
+# Each fragment is wrapped in its own `(?:...)` so its internal alternation
+# (e.g. `[^"\\\n] | \\.`) cannot interact with the outer `|` chain.
+# Triple-quoted alternatives come first so `"""..."""` never matches as `""` + DQ.
+# TODO: highlight {…} interpolation inside f-strings (design §7.2 deferred extension).
+_M2A_PY_STRING = rf"""
+    (?: \b [rRbBuUfF]{{1,2}} )?
+    (?:
+        (?: {_M2A_STR_TDQ} )
+      | (?: {_M2A_STR_TSQ} )
+      | (?: {_M2A_STR_DQ}  )
+      | (?: {_M2A_STR_SQ}  )
+    )
+"""
+
 _M2A_RULES_CODE_PYTHON = (
     # Use [^\n] not . because re.DOTALL is set globally; design §6.1.
     ("py_comment",    r"\#[^\n]*",                                    M2A_COLOR_COMMENT, None),
-    ("py_string_tdq", _M2A_STR_TDQ,                                   M2A_COLOR_STRING,  None),
-    ("py_string_tsq", _M2A_STR_TSQ,                                   M2A_COLOR_STRING,  None),
-    ("py_string_dq",  _M2A_STR_DQ,                                    M2A_COLOR_STRING,  None),
-    ("py_string_sq",  _M2A_STR_SQ,                                    M2A_COLOR_STRING,  None),
+    ("py_string",     _M2A_PY_STRING,                                 M2A_COLOR_STRING,  None),
     ("py_number",     _M2A_NUM,                                       M2A_COLOR_NUMBER,  None),
     ("py_keyword",    rf"\b(?:{_M2A_PY_KEYWORDS})\b",                 M2A_COLOR_KEYWORD, None),
     ("py_builtin",    rf"\b(?:{_M2A_PY_BUILTINS})\b",                 M2A_COLOR_BUILTIN, None),

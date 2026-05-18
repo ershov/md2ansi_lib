@@ -197,6 +197,61 @@ def test_default_current_style_resets():
     assert md.md2ansi("**x**") == f"{ESC}0;1mx{ESC}0m"
 
 
+# ─── Python string prefix handling ───────────────────────────────────────────
+
+
+def _py_highlight(snippet):
+    """Render `snippet` through the Python code context only (no fence markers)."""
+    return md._md2ansi(snippet, "0", md.M2A_CONTEXT_CODE_PYTHON, md.M2A_DocumentState())
+
+
+def test_py_string_unprefixed():
+    assert f"{ESC}0;38;5;114m\"x\"{ESC}0m" in _py_highlight('a = "x"')
+    assert f"{ESC}0;38;5;114m'y'{ESC}0m" in _py_highlight("a = 'y'")
+
+
+def test_py_string_f_prefix():
+    assert f"{ESC}0;38;5;114mf\"x\"{ESC}0m" in _py_highlight('f"x"')
+
+
+def test_py_string_r_prefix():
+    assert f"{ESC}0;38;5;114mr\"path\"{ESC}0m" in _py_highlight('open(r"path")')
+
+
+def test_py_string_two_char_prefixes():
+    # rb / br / fr / rf — all valid Python combos, in both case variants.
+    for snippet, expected in [
+        ('rb"x"',  'rb"x"'),
+        ('Br"x"',  'Br"x"'),
+        ('fR"x"',  'fR"x"'),
+        ('RF"x"',  'RF"x"'),
+    ]:
+        assert f"{ESC}0;38;5;114m{expected}{ESC}0m" in _py_highlight(snippet)
+
+
+def test_py_string_triple_quoted_prefix():
+    assert f'{ESC}0;38;5;114mf"""hi"""{ESC}0m' in _py_highlight('f"""hi"""')
+
+
+def test_py_string_does_not_eat_preceding_keyword():
+    # `return"hi"` is valid Python (no space required). The `return` must still
+    # be highlighted as a keyword, and "hi" as a string — not the whole span
+    # as a string with `return` as a fake prefix.
+    out = _py_highlight('return"hi"')
+    assert f"{ESC}0;38;5;204mreturn{ESC}0m" in out, repr(out)
+    assert f"{ESC}0;38;5;114m\"hi\"{ESC}0m" in out, repr(out)
+
+
+def test_py_string_does_not_eat_identifier_tail():
+    # In `foor"x"`, the `r` is part of identifier `foor` — only `"x"` should
+    # be colored as a string. The `\b` anchor on the prefix prevents the
+    # `r` from being claimed as a prefix.
+    out = _py_highlight('foor"x"')
+    assert f"{ESC}0;38;5;114m\"x\"{ESC}0m" in out, repr(out)
+    # The `r` immediately before the quote should NOT be styled.
+    assert f"{ESC}0;38;5;114mr\"x\"{ESC}0m" not in out
+
+
 # ─── End-to-end: design doc renders without exception ────────────────────────
 
 
