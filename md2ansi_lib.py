@@ -738,12 +738,14 @@ def md2ansi(text, current_style="0", line_width=0):
 # ### Section: main #########################################################
 
 if __name__ == "__main__":
+    import os
     import sys
+    line_width = int(os.environ["LINE_WIDTH"]) if "LINE_WIDTH" in os.environ else 0
     paths = sys.argv[1:]
     if paths:
         for path in paths:
             with open(path) as f:
-                sys.stdout.write(md2ansi(f.read()))
+                sys.stdout.write(md2ansi(f.read(), line_width=line_width))
     else:
-        sys.stdout.write(md2ansi(sys.stdin.read()))
+        sys.stdout.write(md2ansi(sys.stdin.read(), line_width=line_width))
 
