@@ -252,6 +252,39 @@ def test_py_string_does_not_eat_identifier_tail():
     assert f"{ESC}0;38;5;114mr\"x\"{ESC}0m" not in out
 
 
+# ─── _m2a_inject_color helper ────────────────────────────────────────────────
+
+
+def test_inject_color_single_line():
+    assert md._m2a_inject_color("hi", "1") == "\x1b[1mhi"
+    assert md._m2a_inject_color("hi", "1", "0") == "\x1b[1mhi\x1b[0m"
+
+
+def test_inject_color_re_emits_after_interior_newline():
+    out = md._m2a_inject_color("a\nb", "1", "0")
+    assert out == "\x1b[1ma\n\x1b[1mb\x1b[0m"
+
+
+def test_inject_color_runs_of_newlines_count_as_one():
+    # Run of two \n's still gets a single SGR injection after the run.
+    out = md._m2a_inject_color("a\n\nb", "1", "0")
+    assert out == "\x1b[1ma\n\n\x1b[1mb\x1b[0m"
+
+
+def test_inject_color_no_injection_for_trailing_newlines():
+    # Trailing \n's are NOT followed by an SGR — only the reset.
+    assert md._m2a_inject_color("a\n", "1", "0") == "\x1b[1ma\n\x1b[0m"
+    assert md._m2a_inject_color("a\n\n", "1", "0") == "\x1b[1ma\n\n\x1b[0m"
+
+
+def test_inject_color_omits_reset_when_none():
+    assert md._m2a_inject_color("a\nb", "1") == "\x1b[1ma\n\x1b[1mb"
+
+
+def test_inject_color_empty_string():
+    assert md._m2a_inject_color("", "1", "0") == "\x1b[1m\x1b[0m"
+
+
 # ─── Multi-line span styling ─────────────────────────────────────────────────
 
 

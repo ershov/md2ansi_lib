@@ -128,27 +128,53 @@ def _m2a_visible_len(s):
     return len(_M2A_ANSI_ESCAPE_RE.sub("", s))
 
 
+def _m2a_inject_color(text, style, reset=None):
+    """Wrap `text` in SGR codes so every line carries its own color setup.
+
+    1. Prepends `\\x1b[{style}m`.
+    2. After every maximal run of `\\n`s that is NOT at end-of-string, re-emits
+       `\\x1b[{style}m` so each line of a multi-line span is self-styled
+       (survives pagers/pipelines that don't carry SGR across newlines).
+    3. If `reset` is not None, appends `\\x1b[{reset}m`.
+
+    Trailing newlines are intentionally skipped — injecting after them would
+    leave a stray SGR sitting on a non-existent next line, and (with reset)
+    produce a no-op open/close pair.
+    """
+    open_sgr = f"\x1b[{style}m"
+    text_len = len(text)
+    def _replace(mt):
+        if mt.end() == text_len:
+            return mt.group(0)
+        return mt.group(0) + open_sgr
+    body = re.sub(r"\n+", _replace, text)
+    out = open_sgr + body
+    if reset is not None:
+        out += f"\x1b[{reset}m"
+    return out
+
+
 def _m2a_fmt_hr(m, current_style, context, state):
     bar = "─" * max(1, state.line_width - 1)
-    return f"\x1b[{current_style}m{bar}\x1b[{current_style}m"
+    return _m2a_inject_color(bar, current_style, current_style)
 
 
 def _m2a_fmt_inline_code(m, current_style, context, state):
     text = m.group(0).strip("`")
-    return f"\x1b[{current_style};{M2A_COLOR_STRING}m{text}\x1b[{current_style}m"
+    return _m2a_inject_color(text, f"{current_style};{M2A_COLOR_STRING}", current_style)
 
 
 def _m2a_fmt_image(m, current_style, context, state):
     name = _m2a_fired_rule(m, context)
     alt = m.group(f"{name}_alt") or ""
-    return f"\x1b[{current_style};3;38;5;245m[IMG: {alt}]\x1b[{current_style}m"
+    return _m2a_inject_color(f"[IMG: {alt}]", f"{current_style};3;38;5;245", current_style)
 
 
 def _m2a_fmt_blockquote(m, current_style, context, state):
     text = m.group(0)
     stripped = "\n".join(re.sub(r"^>[ \t]?", "", ln) for ln in text.split("\n"))
     inner = _md2ansi(stripped, current_style, M2A_CONTEXT_MD_INLINE, state)
-    bar = f"\x1b[{current_style};38;5;245m│\x1b[{current_style}m "
+    bar = _m2a_inject_color("│", f"{current_style};38;5;245", current_style) + " "
     return "\n".join(bar + ln for ln in inner.split("\n"))
 
 
@@ -211,7 +237,7 @@ def _m2a_fmt_list(m, current_style, context, state):
             indent, marker, content = match.groups()
             level = len(indent.expandtabs(4)) // 2
             bullet = "•" if marker in ("-", "*", "+") else marker
-            styled = f"\x1b[{current_style};1m{bullet}\x1b[{current_style}m"
+            styled = _m2a_inject_color(bullet, f"{current_style};1", current_style)
             rendered = _md2ansi(content, current_style, M2A_CONTEXT_MD_INLINE, state)
             out_lines.append(f"{'  ' * level}{styled} {rendered}")
         else:
@@ -234,18 +260,17 @@ def _m2a_fmt_footnote_ref(m, current_style, context, state):
     fid = m.group(f"{name}_id")
     if fid not in state.footnote_order:
         state.footnote_order.append(fid)
-    return f"\x1b[{current_style};38;5;226m[^{fid}]\x1b[{current_style}m"
+    return _m2a_inject_color(f"[^{fid}]", f"{current_style};38;5;226", current_style)
 
 
 def _m2a_render_footnotes(state, current_style):
     if not state.footnote_order:
         return ""
-    out = ["", f"\x1b[{current_style};1mFootnotes:\x1b[{current_style}m"]
+    out = ["", _m2a_inject_color("Footnotes:", f"{current_style};1", current_style)]
     for fid in state.footnote_order:
         text = state.footnotes.get(fid, "Missing footnote definition")
-        out.append(
-            f"  \x1b[{current_style};38;5;226m[^{fid}]\x1b[{current_style}m {text}"
-        )
+        ref = _m2a_inject_color(f"[^{fid}]", f"{current_style};38;5;226", current_style)
+        out.append(f"  {ref} {text}")
     return "\n".join(out) + "\n"
 
 
@@ -255,8 +280,8 @@ def _m2a_fmt_code(m, current_style, context, state, code_context):
     rendered = _md2ansi(body, current_style, code_context, state)
     # Subtle frame: dim corners around the block, body keeps its own coloring.
     bar = "─" * 40
-    top = f"\x1b[{current_style};38;5;239m┌{bar}\x1b[{current_style}m"
-    bot = f"\x1b[{current_style};38;5;239m└{bar}\x1b[{current_style}m"
+    top = _m2a_inject_color(f"┌{bar}", f"{current_style};38;5;239", current_style)
+    bot = _m2a_inject_color(f"└{bar}", f"{current_style};38;5;239", current_style)
     return f"{top}\n{rendered}\n{bot}"
 
 
@@ -537,14 +562,7 @@ def _md2ansi(text, current_style, context, state):
                         inner = _md2ansi(inner, new_style, actual_recurse, state)
                     elif inner is None:
                         inner = m.group(0)
-                    open_sgr = f"\x1b[{new_style}m"
-                    # Re-emit open SGR after each interior newline so every line
-                    # of a multi-line span (e.g. triple-quoted strings, fenced
-                    # blocks) is self-styled — survives pagers/pipelines that
-                    # don't carry SGR state across line breaks.
-                    if "\n" in inner:
-                        inner = inner.replace("\n", f"\n{open_sgr}")
-                    return f"{open_sgr}{inner}\x1b[{current_style}m"
+                    return _m2a_inject_color(inner, new_style, current_style)
                 case _ as func:
                     return func(m, current_style, context, state)
         return m.group(0)
