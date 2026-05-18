@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/mongodbtoolchain/v5/bin/python3 *)"
+    ]
+  }
+}

@@ -278,9 +278,15 @@ def _m2a_render_footnotes(state, current_style):
 def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
     name = _m2a_fired_rule(m, context)
     body = m.group(f"{name}_body")
+    indent = m.group(f"{name}_indent") or ""
     if lang is None:
         # Generic block — read the language tag captured by the pattern, if any.
         lang = (m.groupdict().get(f"{name}_lang") or "").strip()
+    # Strip the fence's leading indent from each body line so width/rendering
+    # are computed against the de-indented content. The indent is re-applied
+    # to every line of the final framed output below.
+    if indent:
+        body = re.sub(rf"(?m)^{re.escape(indent)}", "", body)
     rendered = _md2ansi(body, current_style, code_context, state)
     body_width = max(
         (_m2a_visible_len(ln) for ln in rendered.split("\n")),
@@ -297,7 +303,8 @@ def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
     bot_text = f"└{'─' * inner}┘"
     top = _m2a_inject_color(top_text, f"{current_style};38;5;239", current_style)
     bot = _m2a_inject_color(bot_text, f"{current_style};38;5;239", current_style)
-    # Indent each body line by one space (frame's left corner sits in column 0).
+    # One-space indent inside the frame (frame's left corner sits at col 0 of
+    # frame-local coordinates).
     indented = "\n".join(" " + ln for ln in rendered.split("\n"))
     # `body` capture includes the final content line's terminator, so `indented`
     # usually ends with " " (a trailing indented empty line) — strip that one
@@ -305,7 +312,12 @@ def _m2a_fmt_code(m, current_style, context, state, code_context, lang=None):
     if indented.endswith("\n "):
         indented = indented[:-1]
     sep = "" if indented.endswith("\n") else "\n"
-    return f"{top}\n{indented}{sep}{bot}"
+    framed = f"{top}\n{indented}{sep}{bot}"
+    # Re-apply the source indent to every output line so a code block nested
+    # inside a list/quote keeps its column.
+    if indent:
+        framed = "\n".join(indent + ln for ln in framed.split("\n"))
+    return framed
 
 
 # ─── Section 6: Rule tables ──────────────────────────────────────────────────
@@ -434,22 +446,22 @@ _MD_HR = r"^ (?: -{3,} | ={3,} | _{3,} ) [ \t]* $"
 
 # Fenced code blocks — tempered-greedy body so each char has one matching branch.
 _MD_CODE_PY = r"""
-    ^ [ \t]* ``` [ \t]* python [ \t]* \n
+    ^ (?P<*indent> [ \t]* ) ``` [ \t]* python [ \t]* \n
     (?P<*body> (?: (?! ^ [ \t]* ``` [ \t]* $ ) [\s\S] )* )
     ^ [ \t]* ``` [ \t]* $
 """
 _MD_CODE_BASH = r"""
-    ^ [ \t]* ``` [ \t]* (?:bash|sh) [ \t]* \n
+    ^ (?P<*indent> [ \t]* ) ``` [ \t]* (?:bash|sh) [ \t]* \n
     (?P<*body> (?: (?! ^ [ \t]* ``` [ \t]* $ ) [\s\S] )* )
     ^ [ \t]* ``` [ \t]* $
 """
 _MD_CODE_JS = r"""
-    ^ [ \t]* ``` [ \t]* (?:javascript|js) [ \t]* \n
+    ^ (?P<*indent> [ \t]* ) ``` [ \t]* (?:javascript|js) [ \t]* \n
     (?P<*body> (?: (?! ^ [ \t]* ``` [ \t]* $ ) [\s\S] )* )
     ^ [ \t]* ``` [ \t]* $
 """
 _MD_CODE_GEN = r"""
-    ^ [ \t]* (?:```|~~~) (?P<*lang> \w* ) [ \t]* \n
+    ^ (?P<*indent> [ \t]* ) (?:```|~~~) (?P<*lang> \w* ) [ \t]* \n
     (?P<*body> (?: (?! ^ [ \t]* (?:```|~~~) [ \t]* $ ) [\s\S] )* )
     ^ [ \t]* (?:```|~~~) [ \t]* $
 """

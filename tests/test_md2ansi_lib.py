@@ -340,6 +340,30 @@ def test_code_body_is_indented_by_one_space():
     assert lines[2] == " line2"
 
 
+def test_code_frame_keeps_source_indent():
+    # A fenced block nested inside an indented context (e.g. under a list item
+    # or quote) should have its frame start at that same indent column.
+    src = "- item\n  ```python\n  def g(): pass\n  ```"
+    plain = strip_ansi(md.md2ansi(src))
+    top = next(ln for ln in plain.splitlines() if "┌" in ln)
+    bot = next(ln for ln in plain.splitlines() if "└" in ln)
+    body = next(ln for ln in plain.splitlines() if "def g()" in ln)
+    assert top.startswith("  ┌"), repr(top)
+    assert bot.startswith("  └"), repr(bot)
+    # Body keeps the source indent + the frame's 1-space interior indent.
+    assert body.startswith("   def g(): pass"), repr(body)
+
+
+def test_code_body_inner_indent_preserved_after_strip():
+    # Body has structural indent (4 spaces) on top of the fence indent (2).
+    # After stripping the fence indent, the structural 4 spaces stay.
+    src = "- item\n  ```python\n  def f():\n      return 42\n  ```"
+    plain = strip_ansi(md.md2ansi(src))
+    body_lines = [ln for ln in plain.splitlines() if "def f" in ln or "return" in ln]
+    assert body_lines[0] == "   def f():"
+    assert body_lines[1] == "       return 42"   # 2 (source) + 1 (frame) + 4 (code)
+
+
 def test_code_frame_width_at_least_label_minimum():
     # Tiny body — frame still wide enough for the "Code: javascript" label.
     plain = strip_ansi(md.md2ansi("```javascript\nx\n```"))
