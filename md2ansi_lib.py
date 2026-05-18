@@ -634,37 +634,54 @@ def _m2a_continuation_indent(line):
 
 
 def _m2a_wrap_line(line, line_width, continuation):
-    """Greedy word-wrap with a no-break zone: don't break while the current
-    line still has more than 30 chars of room. Long single words may overflow.
+    """Greedy word-wrap with a no-break zone for the first `line_width - 30`
+    characters. Long single words may overflow.
     """
     if len(line) <= line_width:
         return [line]
     threshold = max(0, line_width - 30)
-    tokens = re.findall(r"\s+|\S+", line)
+
+    # Fast-path: the first `threshold` chars are in the no-break zone — copy
+    # them verbatim, extended to the next word boundary so a word straddling
+    # `threshold` is kept intact. If there is no whitespace beyond `threshold`,
+    # the rest is one giant word and we can't usefully wrap.
+    if threshold > 0:
+        ws_after = re.search(r"\s+", line[threshold:])
+        if ws_after is None:
+            return [line]
+        split_pos = threshold + ws_after.start()
+        head = line[:split_pos]
+        tail = line[split_pos:]
+    else:
+        head = ""
+        tail = line
+
+    tokens = re.findall(r"\s+|\S+", tail)
     if not tokens:
         return [line]
-    lines = []
-    current = ""
+
+    lines_out = []
+    current = [head]
+    current_len = len(head)
     pending_ws = ""
     for tok in tokens:
         if tok[0].isspace():
             pending_ws = tok
             continue
-        attempt = current + pending_ws + tok
-        if not current:
-            current = attempt
-        elif len(attempt) <= line_width:
-            current = attempt
-        elif len(current) < threshold:
-            # Still in no-break zone — attach even though it overflows.
-            current = attempt
+        attempt_len = current_len + len(pending_ws) + len(tok)
+        # Attach if it fits, we're below threshold, or the current line is
+        # empty (no break possible before the first content).
+        if attempt_len <= line_width or current_len < threshold or current_len == 0:
+            current.append(pending_ws)
+            current.append(tok)
+            current_len = attempt_len
         else:
-            lines.append(current)
-            current = continuation + tok
+            lines_out.append("".join(current))
+            current = [continuation, tok]
+            current_len = len(continuation) + len(tok)
         pending_ws = ""
-    if current:
-        lines.append(current)
-    return lines
+    lines_out.append("".join(current))
+    return lines_out
 
 
 def _m2a_wrap_source(text, line_width):
