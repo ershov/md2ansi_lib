@@ -1,2 +1,6 @@
 .swp
 *.swp
+__pycache__/
+*.pyc
+.claude/
+.PLAN.md
