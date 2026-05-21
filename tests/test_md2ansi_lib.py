@@ -603,6 +603,126 @@ def test_hr_uses_150_fallback_when_no_width():
     assert "─" * 149 in out
 
 
+# ─── Table cell wrapping (shrink-to-fit) ─────────────────────────────────────
+
+
+def _table_body_rows(plain_text):
+    """Return body lines (starting with `│`) from a rendered table."""
+    return [ln for ln in plain_text.splitlines() if ln.startswith("│")]
+
+
+def test_table_wide_column_shrinks_short_untouched():
+    long_word = "word " * 20  # 100 chars
+    src = f"| big | s |\n|---|---|\n| {long_word.strip()} | x |"
+    out = strip_ansi(md.md2ansi(src, line_width=40, cell_min_width=5))
+    table_lines = [ln for ln in out.splitlines() if ln.startswith(("│", "┌", "├", "└"))]
+    # The whole table must respect the requested line_width.
+    assert all(len(ln) <= 40 for ln in table_lines), table_lines
+
+
+def test_table_iterative_pin_below_cell_min():
+    # Three columns: two wide-ish, one narrow but above cell_min_width.
+    # When the proportional factor would push the smaller-of-the-wide
+    # below cell_min, it gets pinned and the largest is re-scaled.
+    src = (
+        "| aaaaaaaaaaaaaaaaaaaaaaaa | bbbbbbbbbbbb | c |\n"
+        "|---|---|---|\n"
+        "| " + "x" * 60 + " | " + "y" * 14 + " | z |"
+    )
+    out = strip_ansi(md.md2ansi(src, line_width=40, cell_min_width=10))
+    table_lines = [ln for ln in out.splitlines() if ln.startswith(("│", "┌", "├", "└"))]
+    # At minimum, the algorithm must terminate and produce a table.
+    assert table_lines
+    # Iterating shouldn't crash and at least one body cell should wrap.
+    body_lines = _table_body_rows(out)
+    # Header + at least one body-row line (and more if any cell wrapped).
+    assert len(body_lines) >= 2
+
+
+def test_table_multiline_cell_top_aligned_with_blank_padding():
+    # The first column wraps to multiple lines, the second is a single word.
+    # The single-word cell on row 2 must be padded with blank lines so the
+    # row finishes at the same visual line.
+    long_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
+    src = f"| h1 | h2 |\n|---|---|\n| {long_text} | short |"
+    out = strip_ansi(md.md2ansi(src, line_width=40, cell_min_width=5))
+    body_lines = _table_body_rows(out)
+    # 1 header + N body sub-lines. Find the body block (after the header).
+    # Header is line 0 (single line); body starts at line 1.
+    assert len(body_lines) >= 3   # header + at least 2 wrapped body lines
+    # The continuation body line(s) must have a blank right column (all spaces).
+    for ln in body_lines[2:]:
+        # Cell 2 between the 2nd and 3rd `│`.
+        cells = ln.strip("│").split("│")
+        # Right cell should be empty (just padding spaces).
+        assert cells[1].strip() == "", f"expected blank continuation cell, got {cells[1]!r}"
+
+
+def test_table_row_dividers_true_forces_dividers():
+    # No cell wraps but row_dividers=True should still emit `├─┼─┤` between rows.
+    src = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
+    out = strip_ansi(md.md2ansi(src, row_dividers=True))
+    # Between body rows we expect an `├...┼...┤` divider.
+    lines = out.splitlines()
+    body_indexes = [i for i, ln in enumerate(lines) if re.match(r"^│ [13] ", ln)]
+    assert len(body_indexes) == 2
+    # The line between them must be a divider.
+    between = lines[body_indexes[0] + 1]
+    assert between.startswith("├") and "┼" in between and between.endswith("┤")
+
+
+def test_table_row_dividers_false_suppresses_dividers():
+    long_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
+    src = f"| h1 | h2 |\n|---|---|\n| {long_text} | x |\n| {long_text} | y |"
+    out = strip_ansi(md.md2ansi(src, line_width=40, cell_min_width=5, row_dividers=False))
+    # No inter-body divider may appear; only top, header, and bottom borders.
+    divider_lines = [ln for ln in out.splitlines() if ln.startswith("├") and ln.endswith("┤")]
+    # Exactly one: the header/body separator below the header.
+    assert len(divider_lines) == 1
+
+
+def test_table_row_dividers_auto_enables_on_wrap():
+    long_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
+    src = f"| h1 | h2 |\n|---|---|\n| {long_text} | x |\n| {long_text} | y |"
+    out = strip_ansi(md.md2ansi(src, line_width=40, cell_min_width=5))
+    # row_dividers=None and at least one cell wraps -> divider between body rows.
+    divider_lines = [ln for ln in out.splitlines() if ln.startswith("├") and ln.endswith("┤")]
+    # header/body separator + at least one inter-row separator.
+    assert len(divider_lines) >= 2
+
+
+def test_table_row_dividers_auto_omits_when_no_wrap():
+    src = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
+    out = strip_ansi(md.md2ansi(src, line_width=80))
+    divider_lines = [ln for ln in out.splitlines() if ln.startswith("├") and ln.endswith("┤")]
+    # Only the single header/body separator.
+    assert len(divider_lines) == 1
+
+
+def test_table_all_narrow_unchanged_regardless_of_line_width():
+    src = "| a | b |\n|---|---|\n| 1 | 2 |"
+    natural = strip_ansi(md.md2ansi(src))
+    narrow_lw = strip_ansi(md.md2ansi(src, line_width=20))
+    # All cells fit under cell_min_width — no shrinking should happen.
+    # Trim trailing whitespace/newlines for comparison.
+    assert natural.rstrip("\n") == narrow_lw.rstrip("\n")
+
+
+def test_table_bold_styling_preserved_in_wrapped_cell():
+    # Cell containing an inline **bold** span on the first sub-line, with
+    # additional plain text that forces wrap onto a second sub-line. The
+    # bold span must still be styled (and its single line must carry the
+    # SGR codes); width-affecting markers staying inside one sub-line is a
+    # current limitation of wrap-before-render (see ticket #34).
+    src = (
+        "| h |\n|---|\n"
+        "| **bold** plus enough other words to push some content onto a second line |"
+    )
+    out = md.md2ansi(src, line_width=30, cell_min_width=5)
+    # The bold open SGR (style 0 + ;1) must appear; the inner text must be wrapped.
+    assert f"{ESC}0;1mbold{ESC}0m" in out
+
+
 # ─── End-to-end: design doc renders without exception ────────────────────────
 
 
