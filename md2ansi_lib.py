@@ -310,18 +310,27 @@ def _m2a_fmt_table(m, name, current_style, context, state):
     header_cells = [cell_sublines(rendered_header[i], widths[i]) for i in range(n_cols)]
     body_cells = [[cell_sublines(r[i], widths[i]) for i in range(n_cols)] for r in rendered_body]
 
-    # `_m2a_wrap_line` may leave a single long word unsplit, so the actual
-    # rendered width can exceed the assigned column width. Bump each column
-    # width up to the widest sub-line so the border still encloses its cells.
+    # Per-column actual-vs-assigned reconciliation:
+    #   - if a cell wrap left a sub-line wider than the column (long unbreakable
+    #     token), grow the column to that width and re-wrap every cell in the
+    #     column so any other cells get to use the extra room;
+    #   - if every sub-line fits comfortably below the assigned width, shrink
+    #     the column down to what's actually used.
     for i in range(n_cols):
         actual = max(
-            _m2a_visible_len(s) for s in header_cells[i]
+            (_m2a_visible_len(s) for s in header_cells[i]),
+            default=0,
         )
         for row in body_cells:
             for s in row[i]:
                 actual = max(actual, _m2a_visible_len(s))
         if actual > widths[i]:
             widths[i] = actual
+            header_cells[i] = cell_sublines(rendered_header[i], widths[i])
+            for r_idx, r in enumerate(rendered_body):
+                body_cells[r_idx][i] = cell_sublines(r[i], widths[i])
+        elif actual < widths[i]:
+            widths[i] = max(actual, 1)
 
     def render_row(cells):
         # cells: list of per-column lists of rendered sub-lines.

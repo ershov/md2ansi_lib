@@ -620,6 +620,35 @@ def test_table_wide_column_shrinks_short_untouched():
     assert all(len(ln) <= 40 for ln in table_lines), table_lines
 
 
+def test_table_column_shrinks_when_wrap_does_not_use_assigned_width():
+    # All cells in the column wrap to a max sub-line shorter than the column
+    # received from the layout — the column should shrink to match.
+    src = "| h1 | h2 |\n|---|---|\n| short content here that wraps | other |"
+    out = strip_ansi(md.md2ansi(src, line_width=60, cell_min_width=10))
+    table_lines = [ln for ln in out.splitlines() if ln.startswith(("│", "┌", "├", "└"))]
+    # The widest row line gives the actual table width. It must be ≤ line_width.
+    assert max(len(ln) for ln in table_lines) <= 60
+    # And, having shrunk, the table should NOT be at the line_width limit.
+    assert max(len(ln) for ln in table_lines) < 60
+
+
+def test_table_column_grows_then_rewraps_around_long_token():
+    # A column holding an unbreakable token longer than its assigned width must
+    # grow to fit that token; the other cells in the column get re-wrapped at
+    # the new wider width (so they can use the extra room).
+    long_tok = "X" * 30
+    src = (
+        "| h1 | h2 |\n"
+        "|---|---|\n"
+        f"| {long_tok} | a |\n"
+        "| many small words that have room to combine when the column gets wider | b |"
+    )
+    out = strip_ansi(md.md2ansi(src, line_width=40, cell_min_width=10))
+    plain_rows = _table_body_rows(out)
+    # The long token must appear intact on a single row line.
+    assert any(long_tok in ln for ln in plain_rows)
+
+
 def test_table_iterative_pin_below_cell_min():
     # Three columns: two wide-ish, one narrow but above cell_min_width.
     # When the proportional factor would push the smaller-of-the-wide
