@@ -165,6 +165,79 @@ def test_table_cells_recurse_inline():
     assert f"{ESC}0;1mB{ESC}0m" in out
 
 
+def _table_cell_row(plain_line):
+    # Returns the list of cell contents (with their padding) between `│`.
+    # Strips the leading/trailing `│` and splits.
+    inner = plain_line.strip("│")
+    return inner.split("│")
+
+
+def test_table_align_left_marker_body_and_header():
+    src = "| h | x |\n| :--- | --- |\n| ab | y |"
+    out = md.md2ansi(src)
+    lines = [ln for ln in strip_ansi(out).splitlines() if ln.startswith("│")]
+    # header row, body row
+    header_cells = _table_cell_row(lines[0])
+    body_cells = _table_cell_row(lines[1])
+    # Width of first column is 2 (max of "h" and "ab"); left-aligned -> " ab "
+    assert header_cells[0] == " h  "
+    assert body_cells[0] == " ab "
+
+
+def test_table_align_right_marker_body_and_header():
+    src = "| h | x |\n| ---: | --- |\n| ab | y |"
+    out = md.md2ansi(src)
+    lines = [ln for ln in strip_ansi(out).splitlines() if ln.startswith("│")]
+    header_cells = _table_cell_row(lines[0])
+    body_cells = _table_cell_row(lines[1])
+    # Width 2; right-aligned: header " h" -> " " + " h" -> "  h "; body "ab" -> " ab "
+    assert header_cells[0] == "  h "
+    assert body_cells[0] == " ab "
+
+
+def test_table_align_center_marker_body_and_header():
+    src = "| h | x |\n| :---: | --- |\n| abcd | y |"
+    out = md.md2ansi(src)
+    lines = [ln for ln in strip_ansi(out).splitlines() if ln.startswith("│")]
+    header_cells = _table_cell_row(lines[0])
+    body_cells = _table_cell_row(lines[1])
+    # Width 4; center "h": pad=3 -> left=1, right=2 -> " h  "; outer space pad -> "  h   "
+    assert header_cells[0] == "  h   "
+    assert body_cells[0] == " abcd "
+
+
+def test_table_mixed_alignment_columns():
+    src = "| a | b | c |\n| :--- | :---: | ---: |\n| xx | yy | zz |"
+    out = md.md2ansi(src)
+    lines = [ln for ln in strip_ansi(out).splitlines() if ln.startswith("│")]
+    header_cells = _table_cell_row(lines[0])
+    body_cells = _table_cell_row(lines[1])
+    # Widths all = 2.
+    # left: "a" -> " a  "
+    assert header_cells[0] == " a  "
+    assert body_cells[0] == " xx "
+    # center: "b" pad=1 -> "b " -> " b  "
+    assert header_cells[1] == " b  "
+    assert body_cells[1] == " yy "
+    # right: "c" -> " c" -> "  c "
+    assert header_cells[2] == "  c "
+    assert body_cells[2] == " zz "
+
+
+def test_table_no_separator_defaults_left():
+    src = "| h | x |\n| ab | yyyy |"
+    out = md.md2ansi(src)
+    lines = [ln for ln in strip_ansi(out).splitlines() if ln.startswith("│")]
+    # No separator row -> all cells left-aligned.
+    header_cells = _table_cell_row(lines[0])
+    body_cells = _table_cell_row(lines[1])
+    # Column 0 width 2, column 1 width 4.
+    assert header_cells[0] == " h  "
+    assert header_cells[1] == " x    "
+    assert body_cells[0] == " ab "
+    assert body_cells[1] == " yyyy "
+
+
 def test_list_mixed_markers_and_nesting():
     out = md.md2ansi("- one\n* two\n  - nested\n1. ord")
     assert "·" in out                                    # bullets

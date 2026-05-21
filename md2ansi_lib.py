@@ -131,6 +131,24 @@ def _m2a_visible_len(s):
     return len(_M2A_ANSI_ESCAPE_RE.sub("", s))
 
 
+def _m2a_align_cell(content, width, align):
+    """Pad `content` to `width` columns according to `align`.
+
+    Width math uses _m2a_visible_len so embedded ANSI escapes don't skew it.
+    Caller is responsible for any surrounding decoration (e.g. the single
+    space of inner padding inside table `│ … │` cells).
+    """
+    pad_n = width - _m2a_visible_len(content)
+    if pad_n <= 0:
+        return content
+    if align == "right":
+        return " " * pad_n + content
+    if align == "center":
+        left = pad_n // 2
+        return " " * left + content + " " * (pad_n - left)
+    return content + " " * pad_n
+
+
 def _m2a_prefix_lines(text, prefix):
     """Prepend `prefix` to every line in `text`."""
     return "\n".join(prefix + ln for ln in text.split("\n"))
@@ -203,12 +221,25 @@ def _m2a_fmt_table(m, name, current_style, context, state):
         return m.group(0)
     header = raw_rows[0]
     # Detect separator row (e.g. `| --- | :--: |`); skip if present.
-    # TODO: support table cell alignment: :-- , --: , :--:
     body_start = 1
     if len(raw_rows) >= 2 and all(re.fullmatch(r":?-{2,}:?", c) for c in raw_rows[1]):
         body_start = 2
     body = raw_rows[body_start:]
     n_cols = len(header)
+
+    # Per-column alignment from the separator row (`:--` left, `--:` right,
+    # `:--:` center). Default left when no separator row or no marker.
+    aligns = ["left"] * n_cols
+    if body_start == 2:
+        for i, c in enumerate(raw_rows[1][:n_cols]):
+            left_mark = c.startswith(":")
+            right_mark = c.endswith(":")
+            if left_mark and right_mark:
+                aligns[i] = "center"
+            elif right_mark:
+                aligns[i] = "right"
+            else:
+                aligns[i] = "left"
 
     def pad(row):
         return list(row[:n_cols]) + [""] * max(0, n_cols - len(row))
@@ -229,8 +260,7 @@ def _m2a_fmt_table(m, name, current_style, context, state):
     def render_row(cells):
         parts = []
         for i, c in enumerate(cells):
-            pad_n = widths[i] - _m2a_visible_len(c)
-            parts.append(f" {c}{' ' * pad_n} ")
+            parts.append(f" {_m2a_align_cell(c, widths[i], aligns[i])} ")
         return "│" + "│".join(parts) + "│"
 
     def border(left, mid, right):
