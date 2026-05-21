@@ -44,7 +44,7 @@ class M2A_Context:
 
 @dataclass(slots=True)
 class M2A_DocumentState:
-    line_width: int = 80
+    line_width: int = 150
     footnotes: dict = field(default_factory=dict)
     footnote_order: list = field(default_factory=list)
     cell_min_width: int = 20
@@ -130,6 +130,37 @@ def _m2a_build_context(rules):
 # file. Forward references resolve at call time — fine for function bodies.
 
 _M2A_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# Markdown-table cell-content matcher. Each char is in exactly one branch — a
+# non-pipe non-backslash non-newline char, OR a backslash followed by any
+# single char (the markdown escape, including `\|`). The same tempered-greedy
+# shape we use for string-literal patterns; linear in input size.
+_M2A_TABLE_CELL_RE = re.compile(
+    r" ( (?: [^|\\\n] | \\. )* ) (?: \| | $ ) ",
+    re.VERBOSE,
+)
+
+
+def _m2a_split_table_row(s):
+    """Split a markdown table row on un-escaped `|`. Honours `\\|`.
+    Strips one optional leading `|` and one optional trailing un-escaped `|`,
+    then walks the rest through the linear cell-content regex.
+    """
+    s = s.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    cells = []
+    pos = 0
+    end = len(s)
+    while pos <= end:
+        mt = _M2A_TABLE_CELL_RE.match(s, pos)
+        if mt is None or mt.end() == pos:
+            break
+        cells.append(mt.group(1).strip())
+        pos = mt.end()
+    return cells
 
 
 def _m2a_visible_len(s):
@@ -220,9 +251,7 @@ def _m2a_fmt_table(m, name, current_style, context, state):
         s = ln.strip()
         if not s.startswith("|"):
             continue
-        # `| a | b |` → ['', ' a ', ' b ', ''] → strip outer empties.
-        parts = [c.strip() for c in s.strip("|").split("|")]
-        raw_rows.append(parts)
+        raw_rows.append(_m2a_split_table_row(s))
     if len(raw_rows) < 1:
         return m.group(0)
     header = raw_rows[0]
@@ -304,8 +333,13 @@ def _m2a_fmt_table(m, name, current_style, context, state):
     # `` `code` ``, links, images) are matched against the FULL cell text
     # before any wrapping splits it. Width math runs on visible chars; SGR
     # escapes are preserved verbatim and re-emitted after each break.
+    # Reset at the end of every wrapped sub-line so a styled span left open
+    # at the break point (e.g. `**bold` ending one sub-line, `bold**` on the
+    # next) can't leak into the cell padding, the `│` separator, or the next
+    # cell on the same visual row. Tables don't inherit a style — they're
+    # always top-level — so plain `\x1b[m` (= `\x1b[0m`) is the right reset.
     def cell_sublines(rendered, w):
-        return _m2a_wrap_ansi_line(rendered, w, "") if rendered else [""]
+        return _m2a_wrap_ansi_line(rendered, w, "", "\x1b[m") if rendered else [""]
 
     header_cells = [cell_sublines(rendered_header[i], widths[i]) for i in range(n_cols)]
     body_cells = [[cell_sublines(r[i], widths[i]) for i in range(n_cols)] for r in rendered_body]
@@ -828,18 +862,25 @@ def _m2a_wrap_line(line, line_width, continuation):
     return lines_out
 
 
-def _m2a_wrap_ansi_line(line, line_width, continuation=""):
+def _m2a_wrap_ansi_line(line, line_width, continuation="", reset_sgr=""):
     """ANSI-aware variant of `_m2a_wrap_line`: wraps at visible-character
     positions, leaves SGR escape sequences intact, and re-emits the last seen
     SGR at the start of each new line so any styling active at the break
     point survives onto the next line.
+
+    `reset_sgr` (e.g. `"\\x1b[0m"`) is appended to every output line so a
+    styled span that's still open at the break point cannot leak into
+    whatever follows on the same visual row — table-cell separators, padding,
+    or the next cell on the same line.
     """
     if _m2a_visible_len(line) <= line_width:
-        return [line]
+        return [line + reset_sgr]
     threshold = max(0, line_width - 30)
-    # Tokenize: ANSI escapes first (so they're not eaten by \S+),
-    # then whitespace runs, then word runs.
-    tokens = re.findall(r"\x1b\[[0-9;]*m|\s+|\S+", line)
+    # Tokenize: ANSI escapes first (so they're not eaten by the word class),
+    # then whitespace runs, then word runs. The word class explicitly excludes
+    # \x1b so an ESC sequence following a word starts a new token rather than
+    # being swallowed into it.
+    tokens = re.findall(r"\x1b\[[0-9;]*m|\s+|[^\s\x1b]+", line)
 
     lines_out = []
     current = []
@@ -864,7 +905,7 @@ def _m2a_wrap_ansi_line(line, line_width, continuation=""):
             current.append(tok)
             current_vlen = attempt_vlen
         else:
-            lines_out.append("".join(current))
+            lines_out.append("".join(current) + reset_sgr)
             current = [continuation]
             if last_sgr:
                 current.append(last_sgr)
@@ -875,7 +916,7 @@ def _m2a_wrap_ansi_line(line, line_width, continuation=""):
 
     # Flush any trailing escapes (e.g. closing reset).
     current.extend(pending)
-    lines_out.append("".join(current))
+    lines_out.append("".join(current) + reset_sgr)
     return lines_out
 
 

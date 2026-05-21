@@ -668,6 +668,42 @@ def test_table_iterative_pin_below_cell_min():
     assert len(body_lines) >= 2
 
 
+def test_table_wrap_reopens_correct_sgr_after_close():
+    # Cell contains an inline-code span followed by long plain text. The wrap
+    # falls outside the code span. The continuation line must NOT re-open the
+    # code color (because the span was already closed before the break).
+    src = (
+        "| h | x |\n"
+        "|---|---|\n"
+        "| compute `#prompt:N` children (with voice filter applied at projection time) | y |"
+    )
+    rendered = md.md2ansi(src, line_width=60)
+    plain = strip_ansi(rendered)
+    # Find the wrapped continuation line for that cell.
+    cont_line = next(ln for ln in rendered.splitlines() if "projection time" in ln)
+    # The continuation should have a reset (`\x1b[0m` or `\x1b[m`) at its
+    # start position, not the code-color SGR.
+    inner = cont_line.split("│")[1]   # first cell of the wrapped row
+    leading_sgr = re.match(r"\s*(\x1b\[[0-9;]*m)?", inner).group(1) or ""
+    assert "38;5;114" not in leading_sgr, repr(cont_line)
+
+
+def test_table_wrap_no_style_leak_across_cells():
+    # A `**bold**` span that's still open at the wrap point must close before
+    # the cell-separator `│`. Otherwise the bold leaks into the `│`, the
+    # padding, and into the next cell on the same visual row.
+    src = "| **bold spans the wrap here** | next |\n|---|---|\n| body | y |"
+    out = md.md2ansi(src, line_width=30)
+    for ln in out.splitlines():
+        if "bold" in ln:
+            # The bold open must be followed (on the same line) by a reset
+            # BEFORE the cell separator `│`.
+            assert re.search(r"\x1b\[0;1m[^\x1b]*\x1b\[0?m\s*│", ln), repr(ln)
+            break
+    else:
+        raise AssertionError("expected a line containing 'bold'")
+
+
 def test_table_wrap_preserves_inline_formatting_across_breaks():
     # A wrapped cell with `**bold**` and inline `` `code` `` spans must keep
     # the styling intact across the wrap break — the markdown markers must
