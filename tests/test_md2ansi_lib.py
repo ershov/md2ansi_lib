@@ -639,6 +639,27 @@ def test_table_iterative_pin_below_cell_min():
     assert len(body_lines) >= 2
 
 
+def test_table_wrap_preserves_inline_formatting_across_breaks():
+    # A wrapped cell with `**bold**` and inline `` `code` `` spans must keep
+    # the styling intact across the wrap break — the markdown markers must
+    # not leak into the visible output as literal `**` / backticks.
+    src = (
+        "| h1 | h2 |\n"
+        "|---|---|\n"
+        "| **Wrap cache in preview pane** memoize `wrapped` keyed on "
+        "`(text identity, width, ansi_on, query)` | short |"
+    )
+    rendered = md.md2ansi(src, line_width=70, cell_min_width=10)
+    plain = strip_ansi(rendered)
+    # Markdown markers must not appear in the visible output.
+    assert "**" not in plain, f"literal ** leaked: {plain!r}"
+    assert "`" not in plain, f"literal backtick leaked: {plain!r}"
+    # Bold SGR must be present somewhere on the wrapped content.
+    assert "\x1b[0;1m" in rendered
+    # Inline-code SGR (M2A_COLOR_STRING) must be present.
+    assert f"\x1b[0;{md.M2A_COLOR_STRING}m" in rendered
+
+
 def test_table_multiline_cell_top_aligned_with_blank_padding():
     # The first column wraps to multiple lines, the second is a single word.
     # The single-word cell on row 2 must be padded with blank lines so the

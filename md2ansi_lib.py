@@ -298,20 +298,17 @@ def _m2a_fmt_table(m, name, current_style, context, state):
             if not progressed:
                 break
 
-    # ── Per-cell wrapping + rendering ────────────────────────────────────
-    # Wrap the RAW cell text against the assigned column width, then render
-    # each wrapped sub-line through the inline context. Caveat (tracked
-    # under ticket #34): inline rules whose rendered width differs from raw
-    # width — notably links `[x](url)` (URL is dropped) and images
-    # `![alt](url)` (becomes `[IMG: alt]`) — will throw the wrap math off,
-    # since wrapping runs on the raw text. Fixing this requires wrap-after-
-    # render with style-aware token boundaries.
-    def cell_sublines(raw, w):
-        sublines = _m2a_wrap_line(raw, w, "") if raw else [""]
-        return [_md2ansi(s, current_style, M2A_CONTEXT_MD_INLINE, state) for s in sublines]
+    # ── Per-cell wrapping ────────────────────────────────────────────────
+    # Cells are already rendered (`rendered_header`, `rendered_body`). Wrap
+    # the styled text with `_m2a_wrap_ansi_line` so inline rules (`**bold**`,
+    # `` `code` ``, links, images) are matched against the FULL cell text
+    # before any wrapping splits it. Width math runs on visible chars; SGR
+    # escapes are preserved verbatim and re-emitted after each break.
+    def cell_sublines(rendered, w):
+        return _m2a_wrap_ansi_line(rendered, w, "") if rendered else [""]
 
-    header_cells = [cell_sublines(header[i], widths[i]) for i in range(n_cols)]
-    body_cells = [[cell_sublines(row[i], widths[i]) for i in range(n_cols)] for row in body]
+    header_cells = [cell_sublines(rendered_header[i], widths[i]) for i in range(n_cols)]
+    body_cells = [[cell_sublines(r[i], widths[i]) for i in range(n_cols)] for r in rendered_body]
 
     # `_m2a_wrap_line` may leave a single long word unsplit, so the actual
     # rendered width can exceed the assigned column width. Bump each column
@@ -818,6 +815,57 @@ def _m2a_wrap_line(line, line_width, continuation):
             current = [continuation, tok]
             current_len = len(continuation) + len(tok)
         pending_ws = ""
+    lines_out.append("".join(current))
+    return lines_out
+
+
+def _m2a_wrap_ansi_line(line, line_width, continuation=""):
+    """ANSI-aware variant of `_m2a_wrap_line`: wraps at visible-character
+    positions, leaves SGR escape sequences intact, and re-emits the last seen
+    SGR at the start of each new line so any styling active at the break
+    point survives onto the next line.
+    """
+    if _m2a_visible_len(line) <= line_width:
+        return [line]
+    threshold = max(0, line_width - 30)
+    # Tokenize: ANSI escapes first (so they're not eaten by \S+),
+    # then whitespace runs, then word runs.
+    tokens = re.findall(r"\x1b\[[0-9;]*m|\s+|\S+", line)
+
+    lines_out = []
+    current = []
+    current_vlen = 0
+    pending = []      # whitespace + escapes accumulated since the last word
+    pending_vlen = 0  # visible width contributed by `pending`
+    last_sgr = ""     # most recent SGR seen — re-emitted after a break
+
+    for tok in tokens:
+        if tok.startswith("\x1b["):
+            last_sgr = tok
+            pending.append(tok)
+            continue
+        if tok[0].isspace():
+            pending.append(tok)
+            pending_vlen += len(tok)
+            continue
+        # `tok` is a word.
+        attempt_vlen = current_vlen + pending_vlen + len(tok)
+        if attempt_vlen <= line_width or current_vlen < threshold or current_vlen == 0:
+            current.extend(pending)
+            current.append(tok)
+            current_vlen = attempt_vlen
+        else:
+            lines_out.append("".join(current))
+            current = [continuation]
+            if last_sgr:
+                current.append(last_sgr)
+            current.append(tok)
+            current_vlen = len(continuation) + len(tok)
+        pending = []
+        pending_vlen = 0
+
+    # Flush any trailing escapes (e.g. closing reset).
+    current.extend(pending)
     lines_out.append("".join(current))
     return lines_out
 
