@@ -79,6 +79,45 @@ def test_inline_code_spans_a_newline():
     assert "first line\nsecond line" in out
 
 
+def test_escape_punctuation_renders_literal():
+    # `\*asd\*` must NOT trigger italic; the backslashes are stripped and the
+    # asterisks render as literal punctuation.
+    assert strip_ansi(md.md2ansi(r"\*asd\*")) == "*asd*"
+
+
+def test_escape_inside_bold_preserves_styling_around_literals():
+    # `**hello \*world\***` → bold span around "hello *world*".
+    out = md.md2ansi(r"**hello \*world\*** rest")
+    assert f"{ESC}0;1mhello *world*{ESC}0m" in out
+
+
+def test_escape_double_backslash():
+    # `\\` → single literal backslash.
+    assert strip_ansi(md.md2ansi(r"foo\\bar")) == r"foo\bar"
+
+
+def test_escape_non_punctuation_stays_literal():
+    # `\a` — `a` isn't ASCII punctuation, so the backslash stays.
+    assert strip_ansi(md.md2ansi(r"non-punct \a here")) == r"non-punct \a here"
+
+
+def test_escape_inside_inline_code_is_inert():
+    # Backslashes inside inline code are preserved verbatim.
+    assert "\\*" in strip_ansi(md.md2ansi(r"`code \* stays raw`"))
+
+
+def test_escape_hard_line_break():
+    # CommonMark `\<newline>` → emit a newline, drop the backslash.
+    out = strip_ansi(md.md2ansi("line one\\\nline two"))
+    assert "\\\n" not in out
+    assert "line one\nline two" in out
+
+
+def test_escape_brackets_prevent_link():
+    # `\[…\](…)` → literal brackets, not a link.
+    assert strip_ansi(md.md2ansi(r"\[not a link\](nope)")) == "[not a link](nope)"
+
+
 def test_inline_code_double_backtick_allows_internal_backtick():
     out = strip_ansi(md.md2ansi("use ``code with `internal` ticks`` here"))
     assert "code with `internal` ticks" in out
