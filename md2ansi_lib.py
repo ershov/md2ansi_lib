@@ -346,24 +346,40 @@ def _m2a_fmt_table(m, name, current_style, context, state):
 
     # Per-column actual-vs-assigned reconciliation:
     #   - if a cell wrap left a sub-line wider than the column (long unbreakable
-    #     token), grow the column to that width and re-wrap every cell in the
-    #     column so any other cells get to use the extra room;
-    #   - if every sub-line fits comfortably below the assigned width, shrink
+    #     token, possibly enabled by the no-break zone), grow the column and
+    #     re-wrap every cell in the column. The grow step ISN'T idempotent —
+    #     the wider width gives the no-break zone more room, which can let a
+    #     long word land on a line that's already past threshold, producing an
+    #     even wider sub-line. Loop until the column stops growing.
+    #   - if every sub-line fits comfortably below the final width, shrink
     #     the column down to what's actually used.
     for i in range(n_cols):
-        actual = max(
-            (_m2a_visible_len(s) for s in header_cells[i]),
-            default=0,
-        )
-        for row in body_cells:
-            for s in row[i]:
-                actual = max(actual, _m2a_visible_len(s))
-        if actual > widths[i]:
+        def _col_actual():
+            actual = max(
+                (_m2a_visible_len(s) for s in header_cells[i]),
+                default=0,
+            )
+            for row in body_cells:
+                for s in row[i]:
+                    actual = max(actual, _m2a_visible_len(s))
+            return actual
+
+        # Safety bound: each grow strictly increases widths[i], so iterations
+        # are bounded by the longest natural cell width.
+        for _ in range(n_cols + 8):
+            actual = _col_actual()
+            if actual <= widths[i]:
+                break
             widths[i] = actual
             header_cells[i] = cell_sublines(rendered_header[i], widths[i])
             for r_idx, r in enumerate(rendered_body):
                 body_cells[r_idx][i] = cell_sublines(r[i], widths[i])
-        elif actual < widths[i]:
+        else:
+            # Defensive: if we hit the bound without converging, ensure the
+            # column is at least wide enough for the last observed sub-line.
+            widths[i] = max(widths[i], _col_actual())
+
+        if actual < widths[i]:
             widths[i] = max(actual, 1)
 
     def render_row(cells):

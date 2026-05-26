@@ -632,6 +632,25 @@ def test_table_column_shrinks_when_wrap_does_not_use_assigned_width():
     assert max(len(ln) for ln in table_lines) < 60
 
 
+def test_table_column_grow_iterates_until_stable():
+    # Grow + re-wrap isn't idempotent: the wider width gives the no-break
+    # zone more room, which can put another long token onto an already-loaded
+    # line and overflow again. The reconciliation must iterate to stable.
+    # This simulates the repro from /home/ubuntu/sandvault/tmp/q.
+    long_word = "conn->disaggregated_storage.last_checkpoint_meta_lsn"
+    cell = f"Single early-exit at the top of __clayered_adjust_state. Tightly coupled to {long_word} (atomic acquire)."
+    src = (
+        "| a | b | c | Notes |\n"
+        "|---|---|---|---|\n"
+        f"| x | y | z | {cell} |"
+    )
+    out = strip_ansi(md.md2ansi(src, line_width=150))
+    # Every output line should have the same width (no overflow on any sub-line).
+    table_lines = [ln for ln in out.splitlines() if ln.startswith(("│", "┌", "├", "└"))]
+    assert len(set(len(ln) for ln in table_lines)) == 1, \
+        f"non-uniform table widths: {sorted(set(len(ln) for ln in table_lines))}"
+
+
 def test_table_column_grows_then_rewraps_around_long_token():
     # A column holding an unbreakable token longer than its assigned width must
     # grow to fit that token; the other cells in the column get re-wrapped at
