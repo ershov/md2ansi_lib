@@ -632,6 +632,25 @@ def test_table_column_shrinks_when_wrap_does_not_use_assigned_width():
     assert max(len(ln) for ln in table_lines) < 60
 
 
+def test_table_extra_fit_round_recovers_budget():
+    # If one column grew past its layout assignment, the extra fitting round
+    # should reclaim budget from the remaining shrinkable columns so the
+    # whole table can still meet line_width when content allows it.
+    long_word = "conn->disaggregated_storage.last_checkpoint_meta_lsn"
+    row1 = (
+        "| a | b | cur_layered.c:402, cur_layered.c:587 (write), cur_layered.c:1284 "
+        f"| Single early-exit at the top of __clayered_adjust_state. Tightly coupled to {long_word} (atomic acquire). |"
+    )
+    src = "| h1 | h2 | h3 | h4 |\n|---|---|---|---|\n" + row1
+    out = strip_ansi(md.md2ansi(src, line_width=150))
+    table_lines = [ln for ln in out.splitlines() if ln.startswith(("│", "┌", "├", "└"))]
+    widest = max(len(ln) for ln in table_lines)
+    # With a single oversize column (col 4 with the long token), the extra
+    # fitting round should shrink the other shrinkable columns enough that
+    # the table fits within 150.
+    assert widest <= 150, f"table is {widest} wide, expected ≤ 150"
+
+
 def test_table_column_grow_iterates_until_stable():
     # Grow + re-wrap isn't idempotent: the wider width gives the no-break
     # zone more room, which can put another long token onto an already-loaded
