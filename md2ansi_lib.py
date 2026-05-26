@@ -131,6 +131,15 @@ def _m2a_build_context(rules):
 
 _M2A_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# Line-wrap "no-break zone" — within the first N visible chars of a line, an
+# overflowing word is attached rather than triggering a break (there's no
+# useful break point that close to the start). Capped at 20 so a long token
+# in a wide line breaks instead of accumulating leading content past that
+# point; for narrow widths (line_width ≤ 30) the zone shrinks linearly to 0
+# so cramped columns still get aggressive breaks.
+def _m2a_no_break_zone(line_width):
+    return min(20, max(0, line_width - 30))
+
 # Markdown-table cell-content matcher. Each char is in exactly one branch — a
 # non-pipe non-backslash non-newline char, OR a backslash followed by any
 # single char (the markdown escape, including `\|`). The same tempered-greedy
@@ -828,12 +837,14 @@ def _m2a_continuation_indent(line):
 
 
 def _m2a_wrap_line(line, line_width, continuation):
-    """Greedy word-wrap with a no-break zone for the first `line_width - 30`
-    characters. Long single words may overflow.
+    """Greedy word-wrap with a small no-break zone at the start of each line.
+    A word that doesn't fit triggers a break unless the line is still under
+    20 visible chars (in which case we attach and accept the overflow — there's
+    no useful break point that close to the start).
     """
     if len(line) <= line_width:
         return [line]
-    threshold = max(0, line_width - 30)
+    threshold = _m2a_no_break_zone(line_width)
 
     # Fast-path: the first `threshold` chars are in the no-break zone — copy
     # them verbatim, extended to the next word boundary so a word straddling
@@ -891,7 +902,7 @@ def _m2a_wrap_ansi_line(line, line_width, continuation="", reset_sgr=""):
     """
     if _m2a_visible_len(line) <= line_width:
         return [line + reset_sgr]
-    threshold = max(0, line_width - 30)
+    threshold = _m2a_no_break_zone(line_width)
     # Tokenize: ANSI escapes first (so they're not eaten by the word class),
     # then whitespace runs, then word runs. The word class explicitly excludes
     # \x1b so an ESC sequence following a word starts a new token rather than

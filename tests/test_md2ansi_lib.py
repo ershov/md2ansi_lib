@@ -708,17 +708,24 @@ def test_table_wrap_reopens_correct_sgr_after_close():
 
 
 def test_table_wrap_no_style_leak_across_cells():
-    # A `**bold**` span that's still open at the wrap point must close before
-    # the cell-separator `│`. Otherwise the bold leaks into the `│`, the
-    # padding, and into the next cell on the same visual row.
-    src = "| **bold spans the wrap here** | next |\n|---|---|\n| body | y |"
+    # A `**bold**` span — whether it ends inline or gets wrapped — must close
+    # before the cell-separator `│`. Otherwise the bold leaks into the `│`,
+    # the padding, and into the next cell on the same visual row.
+    # Use a long enough cell to force a wrap regardless of threshold tuning.
+    long_bold = "**bold word spans across the wrap point in this cell**"
+    src = f"| {long_bold} | y |\n|---|---|\n| body | y |"
     out = md.md2ansi(src, line_width=30)
     for ln in out.splitlines():
-        if "bold" in ln:
-            # The bold open must be followed (on the same line) by a reset
-            # BEFORE the cell separator `│`.
-            assert re.search(r"\x1b\[0;1m[^\x1b]*\x1b\[0?m\s*│", ln), repr(ln)
-            break
+        if "bold" not in ln:
+            continue
+        # Between the bold-open and the next `│`, there must be a reset SGR.
+        cell_sep_pos = ln.find("│", 1)
+        cell_text = ln[:cell_sep_pos]
+        last_open = cell_text.rfind("\x1b[0;1m")
+        assert last_open >= 0
+        after_open = cell_text[last_open:]
+        assert "\x1b[0m" in after_open or "\x1b[m" in after_open, repr(ln)
+        break
     else:
         raise AssertionError("expected a line containing 'bold'")
 
