@@ -416,6 +416,7 @@ Estimated total: 500–650 lines (verbose-mode patterns inflate line count but p
 - **HR**: `---` → `─` × `(line_width - 1)`. Inherent.
 - **Table**: `| col |` → bordered ASCII table. Inherent.
 - **Footnotes section**: appended at document end if any footnote definitions/refs were seen.
+- **Frontmatter**: a leading `---`…`---` block (tight: no blank lines or `#` comments) → framed "Frontmatter" box; content passes through verbatim (not parsed as markdown).
 
 ### 10.3 Footnote semantics
 

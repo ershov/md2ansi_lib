@@ -531,7 +531,7 @@ def _m2a_render_footnotes(state, current_style):
     return "\n".join(out) + "\n"
 
 
-def _m2a_fmt_code(m, name, current_style, context, state, code_context, lang=None):
+def _m2a_fmt_code(m, name, current_style, context, state, code_context, lang=None, label=None):
     body = m.group(f"{name}_body")
     indent = m.group(f"{name}_indent") or ""
     if lang is None:
@@ -547,7 +547,8 @@ def _m2a_fmt_code(m, name, current_style, context, state, code_context, lang=Non
         (_m2a_visible_len(ln) for ln in rendered.split("\n")),
         default=0,
     )
-    label = f"Code: {lang}" if lang else "Code"
+    if label is None:
+        label = f"Code: {lang}" if lang else "Code"
     # Layout: the frame sticks out 1 char past the body on each side, and the
     # body is indented by 1 space so it sits inside the frame. `inner` is the
     # dash count between the corners; total visible frame width = inner + 2.
@@ -703,6 +704,24 @@ _MD_H6 = r"^ \#{6} [ \t]+ (?P<*> [^\n]+ ) $"
 
 _MD_HR = r"^ (?: -{3,} | ={3,} | _{3,} ) [ \t]* $"
 
+# Frontmatter — anchored to file start via `\A` so it never matches
+# mid-document. Empty `(?P<*indent>)` group so the shared `_m2a_fmt_code`
+# framing (which reads `{name}_indent`) works with no indent. The body is a run
+# of lines that are each non-empty, non-comment (`#…`), and not the closing
+# fence; the first blank line, `#` comment, or `---` ends it. Requiring a tight
+# block keeps real markdown (which has blank lines / `#` headings) from being
+# mistaken for frontmatter when a document opens with a `---` thematic break.
+# The closing `---` ends at `$` (not consuming its trailing newline, like code
+# fences) so the framed box doesn't merge with the following line. MUST precede
+# `hr` in the rule table (both match a leading `---`).
+_MD_FRONTMATTER = r"""
+    \A (?P<*indent>) --- [ \t]* \n
+    (?P<*body>
+        (?: ^ (?! --- [ \t]* $ ) (?! [ \t]* \# ) (?! [ \t]* $ ) [^\n]* \n )*
+    )
+    ^ --- [ \t]* $
+"""
+
 # Fenced code blocks — tempered-greedy body so each char has one matching branch.
 def _fenced(tag, fence=r"```"):
     return rf"""
@@ -804,8 +823,8 @@ _MD_ITALIC = rf"""
 # Lambdas binding the code context (and display language label) for each
 # language-specific code block. The generic block passes lang=None so the
 # handler reads it from the pattern's captured `_lang` group.
-def _m2a_code_lambda(code_ctx, lang=None):
-    return lambda m, name, cs, ctx, st: _m2a_fmt_code(m, name, cs, ctx, st, code_ctx, lang)
+def _m2a_code_lambda(code_ctx, lang=None, label=None):
+    return lambda m, name, cs, ctx, st: _m2a_fmt_code(m, name, cs, ctx, st, code_ctx, lang, label)
 
 # Inline rules — used to build M2A_CONTEXT_MD_INLINE (where _M2A_RECURSE_SELF
 # resolves to INLINE itself), and reused inside _M2A_RULES_MD after rebinding
@@ -838,6 +857,7 @@ _M2A_RULES_INLINE_IN_MD = tuple(
 )
 
 _M2A_RULES_MD = (
+    ("frontmatter",   _MD_FRONTMATTER,  _m2a_code_lambda(M2A_CONTEXT_CODE_GENERIC, label="Frontmatter"), None),
     ("h1",            _MD_H1,           M2A_COLOR_H1,                                 M2A_CONTEXT_MD_INLINE),
     ("h2",            _MD_H2,           M2A_COLOR_H2,                                 M2A_CONTEXT_MD_INLINE),
     ("h3",            _MD_H3,           M2A_COLOR_H3,                                 M2A_CONTEXT_MD_INLINE),
@@ -1024,9 +1044,26 @@ def _m2a_wrap_source(text, line_width):
     """
     if line_width <= 0:
         return text
+    lines = text.split("\n")
     out = []
+    start = 0
+    # Leading frontmatter (\A `---` … `---`): pass it through verbatim so its
+    # YAML lines aren't word-wrapped. Mirrors the _MD_FRONTMATTER rule exactly,
+    # including its strictness (no blank lines, no `#` comments in the body), so
+    # we only skip what the renderer will actually box. A mid-document `---` is
+    # an HR, not a fence, so `---` can't be a generic in/out toggle here.
+    if lines and re.match(r"^---[ \t]*$", lines[0]):
+        k = 1
+        while k < len(lines):
+            if re.match(r"^---[ \t]*$", lines[k]):
+                out.extend(lines[:k + 1])
+                start = k + 1
+                break
+            if lines[k].strip() == "" or re.match(r"^[ \t]*#", lines[k]):
+                break
+            k += 1
     in_code = False
-    for ln in text.split("\n"):
+    for ln in lines[start:]:
         # Code-fence toggle — anything inside is left verbatim.
         if re.match(r"^[ \t]*(```|~~~)", ln):
             in_code = not in_code

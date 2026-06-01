@@ -181,6 +181,69 @@ def test_fenced_code_generic_passes_through():
     assert "**not bold**" in out
 
 
+# ─── Frontmatter ─────────────────────────────────────────────────────────────
+
+
+def test_frontmatter_renders_framed_box():
+    out = md.md2ansi("---\ntitle: Hello\ntags: x\n---\n# Body")
+    plain = strip_ansi(out)
+    # Framed like a code block, labelled "Frontmatter".
+    assert "Frontmatter" in plain
+    for ch in "┌┐└┘─":
+        assert ch in out, f"missing frame char {ch}"
+    # YAML body passes through verbatim.
+    assert "title: Hello" in plain
+    # Content after the closing fence is still parsed (h1 colored).
+    assert f"{ESC}0;38;5;226m" in out
+
+
+def test_frontmatter_box_not_merged_with_following_line():
+    out = strip_ansi(md.md2ansi("---\ntitle: x\n---\n# Body"))
+    assert "Body" in out
+    # Closing border on its own line, not glued to the next block.
+    assert "┘Body" not in out
+
+
+def test_frontmatter_body_not_markdown_parsed():
+    out = md.md2ansi("---\nx: **not bold**\n---")
+    # Generic (no-highlight) context: emphasis markers survive verbatim.
+    assert "**not bold**" in strip_ansi(out)
+    assert f"{ESC}0;1mnot bold{ESC}0m" not in out
+
+
+def test_frontmatter_requires_closing_fence():
+    # No closing `---`: the opening `---` is just an HR, not frontmatter.
+    out = md.md2ansi("---\ntitle: x")
+    assert "Frontmatter" not in strip_ansi(out)
+    assert "─" in out
+
+
+def test_mid_document_dashes_are_hr_not_frontmatter():
+    out = md.md2ansi("intro\n\n---\n\nmore")
+    assert "Frontmatter" not in strip_ansi(out)
+    assert "─" in out
+
+
+def test_frontmatter_with_blank_line_is_not_matched():
+    # A blank line in the body disqualifies it as frontmatter (real markdown
+    # has blank lines; a tight YAML block does not) → HR, not a box.
+    out = md.md2ansi("---\ntitle: x\n\nbody: y\n---")
+    assert "Frontmatter" not in strip_ansi(out)
+
+
+def test_frontmatter_with_comment_is_not_matched():
+    # A `#` comment line in the body disqualifies it as frontmatter.
+    out = md.md2ansi("---\ntitle: x\n# note\nmore: y\n---")
+    assert "Frontmatter" not in strip_ansi(out)
+
+
+def test_frontmatter_body_not_line_wrapped():
+    long_val = "description: " + " ".join(["word"] * 20)
+    out = md.md2ansi(f"---\n{long_val}\n---", line_width=40)
+    # The long YAML line is preserved intact inside the box (not word-wrapped).
+    assert long_val in strip_ansi(out)
+
+
 def test_blockquote_renders_bar():
     out = md.md2ansi("> first\n> second")
     assert "│" in out
