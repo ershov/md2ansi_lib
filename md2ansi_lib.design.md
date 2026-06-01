@@ -32,6 +32,9 @@ Exports (top-level names available after `from md2ansi_lib import *` or paste):
 | `M2A_CONTEXT_CODE_JAVASCRIPT` | M2A_Context | JS syntax-highlight grammar |
 | `M2A_CONTEXT_CODE_GENERIC` | M2A_Context | Fallback (no highlighting) |
 | `M2A_COLOR_*` | str constants | Bare SGR codes (no `\e[...m` wrapping) |
+| `md2ansi_scan` | function | Structural scan: yields `M2A_Span` per top-level match (offsets into raw source), filtered by kind |
+| `M2A_Span` | dataclass | One scan result: `kind`, `subtype`, `is_block`, `start`, `end`, `text` |
+| `M2A_SPANS_BLOCK` / `M2A_SPANS_INLINE` / `M2A_SPANS_ALL` | frozensets | Broad-kind sets for `md2ansi_scan(kinds=…)` |
 
 ## 3. Naming Conventions
 

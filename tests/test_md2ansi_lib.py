@@ -968,3 +968,105 @@ def test_design_doc_renders_without_exception():
     assert "Design Document" in strip_ansi(out)
     # Sanity: many escapes; the rendering shouldn't be a near-passthrough.
     assert out.count("\x1b[") > 100
+
+
+# ─── Structural scan API: data model ─────────────────────────────────────────
+
+
+def test_span_kind_sets_partition():
+    assert md.M2A_SPANS_ALL == md.M2A_SPANS_BLOCK | md.M2A_SPANS_INLINE
+    assert md.M2A_SPANS_BLOCK.isdisjoint(md.M2A_SPANS_INLINE)
+
+
+def test_span_block_kinds_contents():
+    assert md.M2A_SPANS_BLOCK == {
+        "frontmatter", "heading", "hr", "code",
+        "blockquote", "table", "list", "footnote_def",
+    }
+
+
+def test_span_inline_kinds_contents():
+    assert md.M2A_SPANS_INLINE == {
+        "code_inline", "escape", "image", "link", "emphasis", "footnote_ref",
+    }
+
+
+def test_span_is_a_frozen_record():
+    import dataclasses
+    s = md.M2A_Span(kind="heading", subtype="h2", is_block=True,
+                    start=0, end=4, text="## x")
+    assert dataclasses.is_dataclass(s)
+    assert (s.kind, s.subtype, s.is_block, s.start, s.end, s.text) == \
+        ("heading", "h2", True, 0, 4, "## x")
+    try:
+        s.kind = "x"
+        assert False, "M2A_Span should be frozen"
+    except dataclasses.FrozenInstanceError:
+        pass
+
+
+# ─── Structural scan API: md2ansi_scan ───────────────────────────────────────
+
+
+def test_scan_yields_block_spans_in_document_order():
+    src = "# A\n\ntext\n\n## B\n\n- item\n"
+    spans = list(md.md2ansi_scan(src))
+    assert [(s.kind, s.subtype) for s in spans] == [
+        ("heading", "h1"), ("heading", "h2"), ("list", "list"),
+    ]
+    for s in spans:
+        assert src[s.start:s.end] == s.text   # offsets round-trip
+
+
+def test_scan_default_excludes_inline():
+    # No block construct, and inline is excluded by the default kind set.
+    assert list(md.md2ansi_scan("a **bold** b")) == []
+
+
+def test_scan_all_surfaces_top_level_inline():
+    spans = list(md.md2ansi_scan("a **bold** b", md.M2A_SPANS_ALL))
+    assert [(s.kind, s.subtype, s.is_block) for s in spans] == [
+        ("emphasis", "bold", False),
+    ]
+    assert spans[0].text == "**bold**"
+
+
+def test_scan_kinds_whitelist_excludes_others():
+    src = "# H\n\n```\ncode\n```\n\n- item\n"
+    spans = list(md.md2ansi_scan(src, {"heading", "list"}))
+    assert [s.kind for s in spans] == ["heading", "list"]   # code excluded
+
+
+def test_scan_unknown_kind_raises_eagerly():
+    # Validation is eager — raises at the call, before any iteration.
+    try:
+        md.md2ansi_scan("# H", {"heding"})
+        assert False, "expected ValueError for unknown kind"
+    except ValueError:
+        pass
+
+
+def test_scan_code_subtype_namespaced():
+    py = list(md.md2ansi_scan("```python\nx=1\n```", {"code"}))
+    assert (py[0].kind, py[0].subtype) == ("code", "code-python")
+    rust = list(md.md2ansi_scan("```rust\nx\n```", {"code"}))
+    assert (rust[0].kind, rust[0].subtype) == ("code", "code-rust")
+    plain = list(md.md2ansi_scan("```\nx\n```", {"code"}))
+    assert (plain[0].kind, plain[0].subtype) == ("code", "code")
+
+
+def test_scan_frontmatter_span_present():
+    spans = list(md.md2ansi_scan("---\nx: 1\n---\n# H"))
+    assert [s.kind for s in spans] == ["frontmatter", "heading"]
+    assert all(s.is_block for s in spans)
+
+
+def test_scan_design_doc_headings_in_order():
+    path = os.path.join(os.path.dirname(__file__), "..", "md2ansi_lib.design.md")
+    with open(path) as f:
+        src = f.read()
+    headings = list(md.md2ansi_scan(src, {"heading"}))
+    assert len(headings) > 10
+    assert [s.start for s in headings] == sorted(s.start for s in headings)
+    assert headings[0].subtype == "h1"
+    assert "Design Document" in headings[0].text

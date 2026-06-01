@@ -101,9 +101,11 @@ def md2ansi_scan(text, kinds=M2A_SPANS_BLOCK):
     name not in M2A_SPANS_ALL."""
 ```
 
-- Validates `set(kinds) <= M2A_SPANS_ALL`; raises `ValueError` listing the
-  unknown kind(s). Fail-fast typo guard for caller-composed sets, and surfaces
-  any future kind rename loudly instead of silently matching nothing.
+- Validates `set(kinds) <= M2A_SPANS_ALL` **eagerly** (at the call — the public
+  `md2ansi_scan` is a thin validator returning the `_m2a_scan` generator);
+  raises `ValueError` listing the unknown kind(s). Fail-fast typo guard for
+  caller-composed sets, and surfaces any future kind rename loudly instead of
+  silently matching nothing.
 - Runs `M2A_CONTEXT_MD.compiled.finditer(text)` — the same regex/engine/order
   the renderer uses, so the scan can't drift from what gets rendered.
 - For each match, identifies the outer rule via the same "first non-None outer
