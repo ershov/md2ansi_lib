@@ -1,2 +1,3 @@
 #!/bin/bash
-LINE_WIDTH=150 md2ansi_lib.py "$@" | less -RS
+# Part of the browse-tui toolset (install/uninstall ownership marker).
+LINE_WIDTH="${COLUMNS:-150}" md2ansi_lib.py "$@" | less -RS
