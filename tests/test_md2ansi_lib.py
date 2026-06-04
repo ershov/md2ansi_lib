@@ -101,9 +101,23 @@ def test_escape_non_punctuation_stays_literal():
     assert strip_ansi(md.md2ansi(r"non-punct \a here")) == r"non-punct \a here"
 
 
-def test_escape_inside_inline_code_is_inert():
-    # Backslashes inside inline code are preserved verbatim.
-    assert "\\*" in strip_ansi(md.md2ansi(r"`code \* stays raw`"))
+def test_inline_code_honors_escaped_backtick():
+    # `\`` inside a single-backtick span is a literal backtick, not a closing
+    # delimiter — resolved the same way as other inline formatting.
+    out = strip_ansi(md.md2ansi(r"x `a \` b` y"))
+    assert "a ` b" in out
+    assert "\\" not in out
+
+
+def test_inline_code_keeps_non_backtick_escape_verbatim():
+    # Inside a single-backtick span `\` only escapes a backtick; every other
+    # backslash (including before punctuation) is preserved verbatim.
+    assert r"code \* now" in strip_ansi(md.md2ansi(r"`code \* now`"))
+
+
+def test_double_backtick_keeps_backslash_verbatim():
+    # Double-backtick spans stay inert to backslash escapes per CommonMark.
+    assert "\\*" in strip_ansi(md.md2ansi(r"``code \* stays raw``"))
 
 
 def test_escape_hard_line_break():
