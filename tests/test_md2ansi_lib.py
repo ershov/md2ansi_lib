@@ -736,6 +736,50 @@ def test_hr_uses_150_fallback_when_no_width():
     assert "─" * 149 in out
 
 
+# ─── Inline spans surviving a wrap break ─────────────────────────────────────
+
+
+def test_wrap_inside_bold_keeps_bold_when_continuation_looks_ordinal():
+    # The wrap break lands inside the bold span and the continuation line
+    # happens to start with "3. " (an ordinal). Wrapping must not leave the
+    # `**` literal nor parse the fragment as a new list item.
+    src = ("Intro words here and then **a bold span mentioning step 3. "
+           "that keeps going well past the wrap point** end.")
+    out = md.md2ansi(src, line_width=55)
+    assert "**" not in strip_ansi(out)        # markers consumed, not literal
+    assert "\x1b[0;1m" in out                  # bold SGR actually applied
+
+
+def test_wrap_inside_bold_keeps_bold_when_continuation_starts_with_dash():
+    # A literal hyphen inside the bold span must stay a hyphen, never become a
+    # list bullet, when a wrap break puts it at the start of a continuation line.
+    src = ("Some intro text and a **bold region discussing the cost - benefit "
+           "tradeoff in great detail here** done.")
+    out = strip_ansi(md.md2ansi(src, line_width=55))
+    assert "**" not in out
+    assert "·" not in out                      # no spurious bullet
+
+
+def test_wrap_inside_list_inline_code_survives_break():
+    # Reproduces the q-file failure: a list item whose inline-code span is split
+    # by a wrap break. The backticks must be consumed, not left literal.
+    src = ("1. **`to_item` treats a bare `tuple` as positional fields** "
+           "(`030-data.py:195`): `(id, title, tag, the rest)` so a bare tuple "
+           "must be built carefully.")
+    out = strip_ansi(md.md2ansi(src, line_width=86))
+    assert "`" not in out                       # inline-code markers consumed
+    assert "**" not in out
+
+
+def test_wrap_measures_visible_width_not_raw_markup():
+    # A line of `**wNN**` spans renders to ~4 visible cols each, so at width 40
+    # the first wrapped line should be near-full, not wrapped at the raw-markup
+    # width (which counted the `**` and stopped at ~19 visible cols).
+    src = " ".join("**w%02d**" % i for i in range(20))
+    first = strip_ansi(md.md2ansi(src, line_width=40)).splitlines()[0]
+    assert len(first) >= 30
+
+
 # ─── Table cell wrapping (shrink-to-fit) ─────────────────────────────────────
 
 
