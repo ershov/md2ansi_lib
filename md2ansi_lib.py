@@ -82,10 +82,12 @@ _M2A_NUM = r"""
 """
 
 # Block-start lookahead — substituted into every cross-line inline rule's
-# soft-newline branch so inline matching stops at block boundaries.
+# soft-newline branch so inline matching stops at block boundaries. The `#`
+# branch requires 1–6 hashes followed by a space, matching a real ATX heading
+# (_MD_H1.._MD_H6); a bare `#word` is not a heading and must not stop a span.
 _M2A_BLOCK_START_AHEAD = r"""
     [ \t]* (?:
-        \#
+        \#{1,6} [ \t]
       | >
       | \|
       | `{3,}

@@ -151,6 +151,23 @@ def test_inline_code_stops_at_block_boundary():
     assert "`open across" in out      # left as literal text
 
 
+def test_inline_span_crosses_hash_without_space():
+    # `#nospace` at the start of the next line is NOT an ATX heading (real
+    # headings require a space after the `#`s), so the block-start lookahead
+    # must let an inline span run across the soft newline into it.
+    out = strip_ansi(md.md2ansi("text `open across\n#nospace line` after"))
+    assert "open across\n#nospace line" in out
+    assert "`" not in out             # backticks consumed → span matched
+
+
+def test_inline_span_stops_at_real_heading_on_next_line():
+    # A genuine ATX heading (`#` + space) on the next line is a block start and
+    # must still stop a runaway inline span (regression guard for the tighten).
+    out = strip_ansi(md.md2ansi("text `open across\n# real heading` after"))
+    assert "`open across" in out      # left as literal text
+    assert "real heading" in out      # rendered as a heading (no leading `#`)
+
+
 def test_link():
     out = md.md2ansi("[click](http://x)")
     assert f"{ESC}0;38;5;45;4mclick{ESC}0m" in out
