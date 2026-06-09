@@ -411,6 +411,44 @@ def test_table_cells_recurse_inline():
     assert f"{ESC}0;1mB{ESC}0m" in out
 
 
+# ─── Code-span-aware cell splitting ──────────────────────────────────────────
+# A pipe inside an inline code span is content, not a column divider, so a cell
+# like `a | b` survives without escaping. See _m2a_split_table_row.
+
+
+def test_table_cell_code_span_hides_pipe():
+    # The motivating bug: an un-escaped | inside `...` split the code span
+    # across three cells. It must stay one cell.
+    assert md._m2a_split_table_row("| aaa | `ccc | ddd` |") == ["aaa", "`ccc | ddd`"]
+
+
+def test_table_cell_double_backtick_span_hides_pipe():
+    assert md._m2a_split_table_row("| a | ``x | y`` | b |") == ["a", "``x | y``", "b"]
+
+
+def test_table_cell_code_span_renders_pipe_in_one_cell():
+    # End-to-end: the pipe stays inside the styled inline-code run rather than
+    # becoming a column boundary.
+    out = md.md2ansi("| h | x |\n|---|---|\n| `a | b` | y |", line_width=80)
+    assert f"{ESC}0;38;5;114ma | b{ESC}0m" in out
+
+
+def test_table_cell_unbalanced_backtick_still_splits():
+    # No closing backtick -> the stray ` is an ordinary char and | still splits
+    # (degrades to prior behavior; the row was malformed anyway).
+    assert md._m2a_split_table_row("| a `b | c |") == ["a `b", "c"]
+
+
+def test_table_cell_escaped_pipe_still_honored():
+    # Regression guard: \| remains a non-dividing literal as before.
+    assert md._m2a_split_table_row(r"| a\|b | c |") == [r"a\|b", "c"]
+
+
+def test_table_delimiter_row_split_unaffected():
+    # Regression guard: alignment row has no spans and splits as usual.
+    assert md._m2a_split_table_row("|:--|--:|") == [":--", "--:"]
+
+
 def _table_cell_row(plain_line):
     # Returns the list of cell contents (with their padding) between `│`.
     # Strips the leading/trailing `│` and splits.
