@@ -206,10 +206,123 @@ def test_fenced_code_javascript():
     assert f"{ESC}0;38;5;204mconst{ESC}0m" in out
 
 
-def test_fenced_code_generic_passes_through():
+def test_fenced_code_c():
+    out = md.md2ansi("```c\n#include <stdio.h>\nint main(void) { return 0; }\n```")
+    assert f"{ESC}0;38;5;204m#include{ESC}0m" in out      # preprocessor
+    assert f"{ESC}0;38;5;204mint{ESC}0m" in out           # keyword/type
+    assert f"{ESC}0;38;5;204mreturn{ESC}0m" in out
+    assert f"{ESC}0;38;5;220m0{ESC}0m" in out             # number
+
+
+def test_fenced_code_c_comment_and_string():
+    out = md.md2ansi('```c\nchar *s = "hi"; // greet\n```')
+    assert f"{ESC}0;38;5;114m\"hi\"{ESC}0m" in out         # string
+    assert f"{ESC}0;38;5;245m// greet{ESC}0m" in out       # line comment
+
+
+def test_fenced_code_c_block_comment():
+    out = md.md2ansi("```c\n/* note */ int y;\n```")
+    assert f"{ESC}0;38;5;245m/* note */{ESC}0m" in out     # block comment
+
+
+def test_fenced_code_cpp():
+    out = md.md2ansi("```cpp\nclass Foo { std::string s; };\n```")
+    assert f"{ESC}0;38;5;204mclass{ESC}0m" in out          # C++ keyword
+    assert f"{ESC}0;38;5;147mstd{ESC}0m" in out            # builtin
+
+
+def test_code_c_frame_label():
+    # `c`, `cpp`, and `c++` fences all render under the shared "C/C++" label.
+    assert "C/C++" in strip_ansi(md.md2ansi("```c\nint x;\n```"))
+    assert "C/C++" in strip_ansi(md.md2ansi("```cpp\nint x;\n```"))
+    assert "C/C++" in strip_ansi(md.md2ansi("```c++\nint x;\n```"))
+
+
+def test_scan_code_c_subtype():
+    spans = list(md.md2ansi_scan("```cpp\nint x;\n```", {"code"}))
+    assert (spans[0].kind, spans[0].subtype) == ("code", "code-c")
+
+
+# ─── Unknown / unmarked code blocks ──────────────────────────────────────────
+
+
+def test_unknown_block_colors_numbers_and_punct():
+    out = md.md2ansi("```\nfoo = 42 + bar\n```")
+    assert f"{ESC}0;38;5;220m42{ESC}0m" in out             # number
+    assert f"{ESC}0;38;5;246m={ESC}0m" in out              # punctuation dimmed
+
+
+def test_unknown_block_colors_string():
+    out = md.md2ansi('```\nname "value"\n```')
+    assert f"{ESC}0;38;5;114m\"value\"{ESC}0m" in out       # string
+
+
+def test_unknown_tag_block_colored():
+    # An unrecognized language tag (e.g. rust) still gets generic coloring.
+    out = md.md2ansi("```rust\nlet x = 7;\n```")
+    assert f"{ESC}0;38;5;220m7{ESC}0m" in out
+    assert f"{ESC}0;38;5;246m={ESC}0m" in out
+
+
+def test_unknown_block_string_spans_linebreak():
+    # Permissive strings may run across newlines; the color re-emits on line 2.
+    out = md.md2ansi('```\na = "line one\nline two"\n```')
+    assert f"{ESC}0;38;5;114m\"line one" in out
+    assert f"{ESC}0;38;5;114mline two\"" in out
+
+
+def test_unknown_block_no_comment_coloring():
+    # Comment syntax is unknown, so `#`/`//` runs are not comment-colored; a
+    # plain word stays the default color (no SGR injected around it).
+    out = md.md2ansi("```\nhello world\n```")
+    assert "hello" in strip_ansi(out)
+    assert f"{ESC}0;38;5;114mhello" not in out             # not string-colored
+
+
+def test_frontmatter_stays_plain_passthrough():
+    # Frontmatter keeps the no-rule generic context — numbers/punct NOT colored.
+    out = md.md2ansi("---\nport: 8080\n---")
+    assert f"{ESC}0;38;5;220m8080{ESC}0m" not in out
+    assert "port: 8080" in strip_ansi(out)
+
+
+def test_fenced_code_generic_no_markdown_parsing():
     out = md.md2ansi("```\nplain text **not bold**\n```")
-    # No bold rendering because generic context has no rules.
-    assert "**not bold**" in out
+    # Markdown emphasis is NOT applied inside a code block: the `**` markers
+    # survive literally (now dimmed as punctuation), and no bold SGR is emitted.
+    assert "**not bold**" in strip_ansi(out)
+    assert f"{ESC}0;1mnot bold" not in out
+
+
+# ─── Punctuation dimming (universal) ─────────────────────────────────────────
+
+
+def test_punct_dimmed_in_python():
+    # Operators/punctuation runs get the dim-gray punct color (38;5;246).
+    out = md.md2ansi("```python\nx = 1\n```")
+    assert f"{ESC}0;38;5;246m={ESC}0m" in out
+
+
+def test_punct_dimmed_in_bash():
+    out = md.md2ansi("```bash\nx=$((1 + 2))\n```")
+    assert f"{ESC}0;38;5;246m" in out
+
+
+def test_punct_dimmed_in_javascript():
+    out = md.md2ansi("```javascript\nx = 1;\n```")
+    assert f"{ESC}0;38;5;246m={ESC}0m" in out
+
+
+def test_punct_does_not_steal_float_dot():
+    # The `.` inside a float stays part of the (yellow) number, not dimmed.
+    out = md.md2ansi("```python\ny = 3.14\n```")
+    assert f"{ESC}0;38;5;220m3.14{ESC}0m" in out
+
+
+def test_punct_does_not_steal_comment_slashes():
+    # `//` opens a JS comment (gray-comment); it must not be split as punctuation.
+    out = md.md2ansi("```javascript\n// hi\n```")
+    assert f"{ESC}0;38;5;245m// hi{ESC}0m" in out
 
 
 # ─── Frontmatter ─────────────────────────────────────────────────────────────
