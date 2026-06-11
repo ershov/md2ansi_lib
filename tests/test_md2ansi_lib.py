@@ -180,6 +180,16 @@ def test_image_substitution():
     assert "u" in out or True  # URL silently dropped
 
 
+def test_linked_image_renders_image_label():
+    # A linked image `[![alt](img)](url)` is an image used as a link's text. It
+    # must render as the image label styled as a link — the image's `](…)` must
+    # not be mistaken for the link's own close+URL (which leaks raw markdown).
+    out = md.md2ansi("[![b-git](media/browse-git.png)](media/browse-git.png)")
+    assert strip_ansi(out) == "[IMG: b-git]"
+    assert "browse-git.png" not in strip_ansi(out)  # URLs discarded
+    assert "38;5;45;4" in out                        # styled as a link
+
+
 # ─── Block-level ─────────────────────────────────────────────────────────────
 
 
