@@ -545,6 +545,71 @@ def test_list_recurses_inline():
     assert f"{ESC}0;1mimportant{ESC}0m" in out
 
 
+# ─── Headings nested in lists / blockquotes ──────────────────────────────────
+# Covered: a heading that is the direct line-content of a list item or a
+# blockquote line. Continuation-line headings and multi-level nesting
+# (e.g. `> - ## h`) are intentionally out of scope — see M2A_CONTEXT_MD_BLOCKLITE
+# — and are not tested here.
+
+
+def test_heading_in_unordered_list_item():
+    out = md.md2ansi("- ## Section title")
+    assert md.M2A_COLOR_H2 in out            # content styled as an H2
+    assert "·" in out                        # bullet chrome preserved
+    plain = strip_ansi(out)
+    assert "Section title" in plain
+    assert "##" not in plain                 # literal hashes consumed, not leaked
+
+
+def test_heading_in_ordered_list_item():
+    out = md.md2ansi("1. ## Ordered head")
+    assert md.M2A_COLOR_H2 in out
+    assert "1." in out                       # ordered marker preserved
+    assert "##" not in strip_ansi(out)
+
+
+def test_heading_in_blockquote():
+    out = md.md2ansi("> ## Quoted head")
+    assert md.M2A_COLOR_H2 in out
+    assert "│" in out                        # quote bar preserved
+    plain = strip_ansi(out)
+    assert "Quoted head" in plain
+    assert "##" not in plain
+
+
+def test_blockquote_heading_then_inline_body():
+    # A heading line plus an emphasized body line in one quote: the heading is
+    # colored and the body is still inline-parsed.
+    out = md.md2ansi("> ## Head\n> body *em*")
+    assert md.M2A_COLOR_H2 in out            # heading on line 1
+    assert f"{ESC}0;3mem{ESC}0m" in out      # italic on line 2
+
+
+def test_heading_in_nested_list_item():
+    out = md.md2ansi("- parent\n  - ### child head")
+    assert md.M2A_COLOR_H3 in out            # H3 on the nested item
+    plain = strip_ansi(out)
+    assert "child head" in plain
+    assert "#" not in plain
+
+
+def test_nested_heading_title_recurses_inline():
+    # Inline markup inside a nested heading's title is still parsed.
+    out = md.md2ansi("- ## **bold** in head")
+    assert md.M2A_COLOR_H2 in out
+    plain = strip_ansi(out)
+    assert "bold in head" in plain
+    assert "**" not in plain                 # bold markup consumed
+    assert "##" not in plain
+
+
+def test_nested_heading_does_not_leak_opaque_marker():
+    # Regression: the nested heading marks its line opaque; that marker must be
+    # stripped, never surfacing as a literal NUL after the bullet/bar.
+    for src in ("- ## h", "1. ## h", "> ## h", "- a\n  - ## h"):
+        assert "\x00" not in md.md2ansi(src), src
+
+
 # ─── Footnotes ───────────────────────────────────────────────────────────────
 
 
