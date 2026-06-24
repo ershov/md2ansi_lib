@@ -1288,7 +1288,8 @@ def test_span_block_kinds_contents():
 
 def test_span_inline_kinds_contents():
     assert md.M2A_SPANS_INLINE == {
-        "code_inline", "escape", "image", "link", "emphasis", "footnote_ref",
+        "code_inline", "escape", "comment", "image", "link", "emphasis",
+        "footnote_ref",
     }
 
 
@@ -1371,3 +1372,91 @@ def test_scan_design_doc_headings_in_order():
     assert [s.start for s in headings] == sorted(s.start for s in headings)
     assert headings[0].subtype == "h1"
     assert "Design Document" in headings[0].text
+
+
+# ─── HTML comments: `<!-- ... -->` dropped (spec §5.1) ───────────────────────
+# A flat inline rule (after `escape`) drops comments wherever inline rules reach:
+# prose, headings, list items, blockquotes, table cells, link text. Code spans
+# and fenced blocks keep the literal text (code rules consume first; code
+# contexts carry no comment rule). Unclosed `<!--` passes through verbatim.
+
+
+def test_html_comment_dropped_in_prose():
+    plain = strip_ansi(md.md2ansi("hello <!-- secret --> world"))
+    assert "secret" not in plain
+    assert "<!--" not in plain and "-->" not in plain
+    assert "hello" in plain and "world" in plain
+
+
+def test_html_comment_dropped_in_heading():
+    out = md.md2ansi("# Title <!-- note -->")
+    assert md.M2A_COLOR_H1 in out            # still a heading
+    plain = strip_ansi(out)
+    assert "Title" in plain
+    assert "note" not in plain and "<!--" not in plain
+
+
+def test_html_comment_dropped_in_list_item():
+    out = md.md2ansi("- item <!-- x -->")
+    assert "·" in out                        # bullet chrome preserved
+    plain = strip_ansi(out)
+    assert "item" in plain
+    assert "<!--" not in plain and "x -->" not in plain
+
+
+def test_html_comment_dropped_in_blockquote():
+    out = md.md2ansi("> quote <!-- x -->")
+    assert "│" in out                        # quote bar preserved
+    plain = strip_ansi(out)
+    assert "quote" in plain
+    assert "<!--" not in plain and "x -->" not in plain
+
+
+def test_html_comment_dropped_in_table_cell():
+    out = md.md2ansi("| a <!-- c --> | b |\n|---|---|\n| 1 | 2 |", line_width=80)
+    plain = strip_ansi(out)
+    assert "<!--" not in plain and "c -->" not in plain
+    assert "a" in plain and "b" in plain
+
+
+def test_html_comment_literal_in_fenced_code():
+    # A code block carries no comment rule, so the text is shown verbatim.
+    plain = strip_ansi(md.md2ansi("```\ntext <!-- keepme --> more\n```"))
+    assert "<!-- keepme -->" in plain
+
+
+def test_html_comment_literal_in_inline_code_span():
+    # The code-span rule precedes the comment rule and consumes the span whole.
+    out = md.md2ansi("a `<!-- keepme -->` b")
+    assert "<!-- keepme -->" in strip_ansi(out)
+
+
+def test_html_comment_multiline_top_level_drops_wholesale():
+    src = "before\n<!-- line1\nline2\nline3 -->\nafter"
+    plain = strip_ansi(md.md2ansi(src))
+    assert "before" in plain and "after" in plain
+    for fragment in ("line1", "line2", "line3", "<!--", "-->"):
+        assert fragment not in plain
+
+
+def test_html_comment_with_pipe_does_not_add_table_columns():
+    # The comment is stripped from each raw row BEFORE the row is split, so a `|`
+    # inside it can't mis-split the row into extra columns.
+    out = md.md2ansi("| a <!-- x | y --> b | c |\n|---|---|\n| 1 | 2 |", line_width=80)
+    rows = [ln for ln in strip_ansi(out).splitlines() if ln.startswith("│")]
+    for ln in rows:
+        # Two columns -> exactly three `│` separators per row.
+        assert ln.count("│") == 3, f"row has wrong column count: {ln!r}"
+
+
+def test_html_comment_unclosed_passes_through_literally():
+    plain = strip_ansi(md.md2ansi("text <!-- unclosed comment"))
+    assert "<!-- unclosed comment" in plain
+
+
+def test_scan_surfaces_html_comment_span():
+    spans = list(md.md2ansi_scan("a <!-- c --> b", {"comment"}))
+    assert [(s.kind, s.subtype, s.is_block) for s in spans] == [
+        ("comment", "comment", False),
+    ]
+    assert spans[0].text == "<!-- c -->"

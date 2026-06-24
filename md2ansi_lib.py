@@ -319,6 +319,13 @@ def _m2a_fmt_escape(m, name, current_style, context, state):
     return m.group(f"{name}_char")
 
 
+def _m2a_fmt_comment(m, name, current_style, context, state):
+    # HTML comment `<!-- … -->` → dropped (no output). recurse=None and re.sub
+    # not rescanning the empty replacement means even a multi-line comment at top
+    # level drops wholesale. (Drop precedent: `_m2a_fmt_footnote_def`.)
+    return ""
+
+
 def _m2a_fmt_image(m, name, current_style, context, state):
     alt = m.group(f"{name}_alt") or ""
     return _m2a_styled(f"[IMG: {alt}]", current_style, f"3;{M2A_COLOR_DIM}")
@@ -353,6 +360,10 @@ def _m2a_fmt_table(m, name, current_style, context, state):
         s = ln.strip()
         if not s.startswith("|"):
             continue
+        # Drop HTML comments before splitting so a `|` inside `<!-- … -->`
+        # cannot mis-split the row (the inline pass would drop it anyway, but
+        # only after the column count was already taken from the raw `|`s).
+        s = _M2A_HTML_COMMENT_RE.sub("", s)
         raw_rows.append(_m2a_split_table_row(s))
     if len(raw_rows) < 1:
         return m.group(0)
@@ -960,6 +971,18 @@ _MD_ESCAPE = r"""
     )
 """
 
+# HTML comment `<!-- … -->` — tempered-greedy and multi-line (same shape as the
+# `js_comment_block` / `c_comment_block` code-context rules). No capture group:
+# the handler drops the whole match. Placed after `escape` so `\<!-- … -->`
+# stays literal; an unclosed `<!--` (no `-->`) simply never matches → verbatim.
+_MD_HTML_COMMENT = r" <!-- (?: (?! --> ) [\s\S] )* --> "
+
+# Standalone compiled twin, used by `_m2a_fmt_table` to strip comments from a raw
+# row line BEFORE splitting on `|`, so a comment containing `|` can't mis-split a
+# row into extra columns. DOTALL so a (rare) multi-line comment inside the table
+# match is also removed.
+_M2A_HTML_COMMENT_RE = re.compile(_MD_HTML_COMMENT, re.VERBOSE | re.DOTALL)
+
 _MD_LINK = rf"""
     (?<!!) \[ (?P<*>
         (?: {_MD_IMAGE_INLINE} | {_MD_ESCAPED} | [^\]\n\\] | \n (?! {_BSA} ) )+
@@ -1027,6 +1050,11 @@ _M2A_RULES_INLINE_RAW = (
     # whole (its own pattern/handler resolve any internal escapes), but BEFORE
     # every other delimiter so `\*`, `\~`, `\[` etc. don't trigger emphasis / links.
     ("escape",        _MD_ESCAPE,       _m2a_fmt_escape,       None),
+    # HTML comments — dropped. After `escape` (so `\<!-- …` stays literal) and
+    # before the delimiter rules. Code spans are already safe: `code_inline*`
+    # precede this in the alternation and consume a span whole; fenced/code
+    # contexts carry no comment rule at all, so a literal `<!-- … -->` survives.
+    ("html_comment",  _MD_HTML_COMMENT, _m2a_fmt_comment,      None),
     ("image",         _MD_IMAGE,        _m2a_fmt_image,        None),
     ("link",          _MD_LINK,         M2A_COLOR_LINK,        _M2A_RECURSE_SELF),
     ("bolditalic",    _MD_BOLDITALIC,   "1;3",                 _M2A_RECURSE_SELF),
@@ -1294,6 +1322,7 @@ _M2A_SPAN_KINDS = {
     "code_generic": ("code", "code"),
     "code_inline2": ("code_inline", "code_inline"),
     "code_inline":  ("code_inline", "code_inline"),
+    "html_comment": ("comment", "comment"),
     "bolditalic":   ("emphasis", "bolditalic"),
     "bold_under":   ("emphasis", "bolditalic"),
     "under_bold":   ("emphasis", "bolditalic"),
