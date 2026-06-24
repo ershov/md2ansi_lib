@@ -1500,3 +1500,136 @@ def test_scan_surfaces_html_comment_span():
         ("comment", "comment", False),
     ]
     assert spans[0].text == "<!-- c -->"
+
+
+# ─── Sentinel infrastructure (ticket #78) ────────────────────────────────────
+#
+# The sentinel constants and their two convergence points: the input sanitizer
+# at the top of `md2ansi()` (source-side) and the final realization sweep in
+# `_m2a_wrap_rendered` (output-side). No producers exist yet, so the sanitizer is
+# exercised through `md2ansi()` and realization is exercised by calling
+# `_m2a_wrap_rendered` directly — the only way to inject a live sentinel at this
+# stage.
+
+
+def _rule_width(line_width):
+    """Expected `─`-run length a realized `\\x02` produces — must mirror
+    `_m2a_fmt_hr`: `max(1, W - 1)` with `W = line_width or 150`."""
+    w = line_width if line_width > 0 else 150
+    return max(1, w - 1)
+
+
+def test_sentinel_constants_distinct_and_correct():
+    assert md._M2A_OPAQUE == "\x00"
+    assert md._M2A_LINEBREAK == "\x01"
+    assert md._M2A_RULE == "\x02"
+    assert md._M2A_NBSP == "\x03"
+    assert len({md._M2A_OPAQUE, md._M2A_LINEBREAK, md._M2A_RULE, md._M2A_NBSP}) == 4
+
+
+# --- Input sanitizer (source-side, via md2ansi) ------------------------------
+
+
+def test_sanitizer_replaces_c0_control_chars_with_replacement_char():
+    for ctrl in ("\x00", "\x07", "\x1f"):
+        plain = strip_ansi(md.md2ansi(f"a{ctrl}b"))
+        assert "�" in plain, f"control {ctrl!r} not replaced: {plain!r}"
+        assert ctrl not in plain, f"control {ctrl!r} survived: {plain!r}"
+
+
+def test_sanitizer_keeps_tab_and_newline():
+    plain = strip_ansi(md.md2ansi("a\tb\nc"))
+    assert "\t" in plain
+    assert "\n" in plain
+    assert "�" not in plain
+
+
+def test_sanitizer_normalizes_crlf_and_lone_cr_to_lf():
+    # \r\n collapses to a single \n (no orphan \r, no doubled break) ...
+    plain_crlf = strip_ansi(md.md2ansi("a\r\nb"))
+    assert "\r" not in plain_crlf
+    assert plain_crlf.split("\n") == ["a", "b"]
+    # ... and a lone \r becomes \n too.
+    plain_cr = strip_ansi(md.md2ansi("a\rb"))
+    assert "\r" not in plain_cr
+    assert plain_cr.split("\n") == ["a", "b"]
+
+
+def test_sanitizer_keeps_esc_so_precolored_source_survives():
+    # A complete SGR sequence in the source is preserved verbatim (ESC is the one
+    # C0 char besides \t/\n that is NOT killed).
+    out = md.md2ansi("a\x1b[31mb")
+    assert "\x1b[31m" in out
+    assert "�" not in out
+
+
+def test_sanitizer_neutralizes_stray_sentinels_in_source():
+    # A sentinel char that appears in the SOURCE is neutralized to U+FFFD before
+    # rendering, so it can never be mistaken for one a handler emitted: it is NOT
+    # realized as a break / rule / space.
+    for ctrl in ("\x01", "\x02", "\x03"):
+        plain = strip_ansi(md.md2ansi(f"a{ctrl}b"))
+        assert plain == "a�b", f"stray {ctrl!r} mis-realized: {plain!r}"
+
+
+def test_sanitizer_stray_rule_sentinel_in_source_is_not_a_rule_line():
+    # Specifically: a source \x02 must not turn into a `─` rule line.
+    plain = strip_ansi(md.md2ansi("x\x02y", line_width=40))
+    assert "─" not in plain
+    assert "\n" not in plain  # single line, no rule inserted
+
+
+# --- Final-pass realization (output-side, via _m2a_wrap_rendered) ------------
+
+
+def test_realize_linebreak_splits_prose_line_when_wrapping_on():
+    out = md._m2a_wrap_rendered("alpha\x01beta", line_width=80)
+    assert strip_ansi(out).split("\n") == ["alpha", "beta"]
+
+
+def test_realize_linebreak_splits_line_when_wrapping_off():
+    out = md._m2a_wrap_rendered("alpha\x01beta", line_width=0)
+    assert strip_ansi(out).split("\n") == ["alpha", "beta"]
+
+
+def test_realize_nbsp_becomes_space_on_normal_line():
+    out = md._m2a_wrap_rendered("a\x03b", line_width=80)
+    assert strip_ansi(out) == "a b"
+    assert "\x03" not in out
+
+
+def test_realize_nbsp_becomes_space_when_wrapping_off():
+    out = md._m2a_wrap_rendered("a\x03b", line_width=0)
+    assert strip_ansi(out) == "a b"
+    assert "\x03" not in out
+
+
+def test_realize_nbsp_becomes_space_on_opaque_line():
+    out = md._m2a_wrap_rendered(md._M2A_OPAQUE + "a\x03b", line_width=80)
+    assert strip_ansi(out) == "a b"
+    assert "\x03" not in out
+    assert md._M2A_OPAQUE not in out  # opaque marker stripped as always
+
+
+def test_realize_rule_sentinel_becomes_full_width_rule_when_wrapping_on():
+    out = md._m2a_wrap_rendered("\x02", line_width=40)
+    plain = strip_ansi(out)
+    assert plain == "─" * _rule_width(40)
+    assert "\x02" not in out
+
+
+def test_realize_rule_sentinel_becomes_rule_when_wrapping_off_uses_150_fallback():
+    out = md._m2a_wrap_rendered("\x02", line_width=0)
+    plain = strip_ansi(out)
+    assert plain == "─" * _rule_width(0)  # 149 dashes
+    assert "\x02" not in out
+
+
+def test_realize_rule_sentinel_on_its_own_output_line():
+    # A \x02 embedded in prose with surrounding text yields the rule on its own
+    # line (a mid-prose <hr> acts like a block rule).
+    out = md._m2a_wrap_rendered("before\x02after", line_width=40)
+    lines = strip_ansi(out).split("\n")
+    assert "before" in lines[0]
+    assert "─" * _rule_width(40) in lines
+    assert any("after" in ln for ln in lines)

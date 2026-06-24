@@ -247,6 +247,25 @@ def _m2a_prefix_lines(text, prefix):
 # it consumes.
 _M2A_OPAQUE = "\x00"
 
+# Three more single-char sentinels share the OPAQUE plumbing but carry distinct
+# deferred-layout semantics. A handler emits one when a construct's realization
+# depends on the enclosing block (so it can't be resolved during the inline
+# pass); the layout owner or the final pass (`_m2a_wrap_rendered`) realizes it.
+# None of these ever appear in real input — the input sanitizer in `md2ansi()`
+# maps any stray copy in the SOURCE to U+FFFD before rendering, so an emitted
+# sentinel is unambiguous.
+_M2A_LINEBREAK = "\x01"  # hard line break (`<br>`, LF/CR entity) → real `\n`
+_M2A_RULE = "\x02"       # horizontal rule (`<hr>` as content) → `─`-run, container-sized
+_M2A_NBSP = "\x03"       # non-breaking space (`&nbsp;`, U+00A0 entity) → `" "`
+
+# Input sanitizer kill class: every C0 control codepoint EXCEPT `\t` (09),
+# `\n` (0A), and ESC `\x1b` (1B, kept so pre-colored source survives). `\r` (0D)
+# is absent here because CR is normalized to `\n` first. The matched ranges are
+# 0x00–0x08, 0x0B–0x0C, 0x0E–0x1A, 0x1C–0x1F. Mapping these to U+FFFD also
+# subsumes the old `\x00` strip and neutralizes any stray sentinel (`\x00`–`\x03`)
+# in the source so it can never be confused with one a handler emitted.
+_M2A_C0_KILL = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1A\x1C-\x1F]")
+
 
 def _m2a_opaque(text):
     """Mark every line of `text` as opaque — exempt from post-render wrapping."""
@@ -1238,17 +1257,45 @@ def _m2a_wrap_rendered(text, line_width):
     lists, blockquotes, footnotes, HR) — they pass through verbatim, with the
     marker stripped. The marker is always stripped here, so this pass also runs
     when wrapping is disabled (`line_width <= 0`) purely to remove markers.
+
+    This is also the single place residual sentinels are realized for uncontained
+    prose (§5.2, §5.3, §6): `\\x01` (line break) splits a line, each piece wrapped
+    independently with its own leading-whitespace continuation; `\\x02` (rule) acts
+    like a block rule, emitting a `─`-run on its own line sized exactly like
+    `_m2a_fmt_hr`; `\\x03` (non-breaking space) becomes a plain `" "` last (so it
+    stays glued — outside the whitespace class — through wrapping). On an opaque
+    line only `\\x03` is realized: that line owns its layout, so its `\\x01`/`\\x02`
+    were already materialized by the block handler that marked it.
     """
+    # Rule run mirrors `_m2a_fmt_hr` exactly: `max(1, W - 1)` with the same 150
+    # fallback `md2ansi()` uses for `state.line_width` when wrapping is off.
+    rule_w = line_width if line_width > 0 else 150
+    rule_line = "─" * max(1, rule_w - 1)
+
     out = []
     for ln in text.split("\n"):
         if ln.startswith(_M2A_OPAQUE):
             out.append(ln[len(_M2A_OPAQUE):])
-        elif line_width > 0:
-            cont = re.match(r"[ \t]*", ln).group(0)
-            out.extend(_m2a_wrap_ansi_line(ln, line_width, cont))
-        else:
-            out.append(ln)
-    return "\n".join(out)
+            continue
+        # Hard breaks first: each `\x01`-piece becomes its own wrapped block.
+        for piece in ln.split(_M2A_LINEBREAK):
+            # A `\x02` acts like a block rule: the prose segments around it wrap
+            # normally, each rule boundary emits a full-width `─` line of its own.
+            segments = piece.split(_M2A_RULE)
+            for i, seg in enumerate(segments):
+                if i > 0:
+                    out.append(rule_line)
+                if not seg and len(segments) > 1:
+                    # Empty segment adjacent to a rule (e.g. a bare `\x02`):
+                    # don't emit a blank prose line around the rule.
+                    continue
+                if line_width > 0:
+                    cont = re.match(r"[ \t]*", seg).group(0)
+                    out.extend(_m2a_wrap_ansi_line(seg, line_width, cont))
+                else:
+                    out.append(seg)
+    # `\x03` → " " last, after wrapping, on every output line (opaque included).
+    return "\n".join(out).replace(_M2A_NBSP, " ")
 
 
 def md2ansi(text, current_style="0", line_width=0, cell_min_width=20, row_dividers=None):
@@ -1267,9 +1314,15 @@ def md2ansi(text, current_style="0", line_width=0, cell_min_width=20, row_divide
     `None` (default) emits inter-row dividers only when any body cell wraps;
     `True` always emits them; `False` never emits them.
     """
-    # NUL is the opaque-line marker; strip any stray copy from the source so it
-    # can't be mistaken for one.
-    text = text.replace(_M2A_OPAQUE, "")
+    # Input sanitizer (the single source-side convergence point, §4): normalize
+    # CRLF and lone CR to `\n` first, then map every remaining C0 control char
+    # except `\t`/`\n`/ESC to U+FFFD. This keeps pre-colored source intact,
+    # guarantees no raw control char reaches output, and neutralizes any stray
+    # sentinel (`\x00`–`\x03`) in the source — so it can't be mistaken for one a
+    # handler emits LATER (those are added after this step and survive to the
+    # final pass). Subsumes the former `\x00` strip.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _M2A_C0_KILL.sub("�", text)
     state_lw = line_width if line_width > 0 else 150
     state = M2A_DocumentState(
         line_width=state_lw,
