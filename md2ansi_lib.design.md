@@ -216,32 +216,42 @@ Block-level rules first (greedy multi-line where applicable), then inline.
 | 5 | `h5` | `^\#{5} [text]$` | str `"38;5;93"` | `M2A_CONTEXT_MD` |
 | 6 | `h6` | `^\#{6} [text]$` | str `"38;5;239"` | `M2A_CONTEXT_MD` |
 | 7 | `hr` | `^(?:-{3,}|={3,}|_{3,})[ \t]*$` | callable `_m2a_fmt_hr` | None |
-| 8 | `code_python` | `` ^```python\n...\n```$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_PYTHON)` | None |
-| 9 | `code_bash` | `` ^```bash\n...\n```$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_BASH)` | None |
-| 10 | `code_javascript` | `` ^```javascript\n...\n```$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_JAVASCRIPT)` | None |
-| 11 | `code_generic` | `` ^(```|~~~)\w*\n...\n(```|~~~)$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_GENERIC)` | None |
-| 12 | `blockquote` | `^> ?[^\n]*(?:\n> ?[^\n]*)*$` | callable `_m2a_fmt_blockquote` | None |
-| 13 | `table` | `^[ \t]*\|[^\n]*(?:\n[ \t]*\|[^\n]*)*$` | callable `_m2a_fmt_table` | None |
-| 14 | `list` | matches consecutive lines starting with `-`, `*`, `+`, or `\d+\.` (mixable; indent-driven nesting) | callable `_m2a_fmt_list` | None |
-| 15 | `footnote_def` | `^\[\^id\]:[ \t]+text(\n[ \t]+text)*$` | callable `_m2a_fmt_footnote_def` (mutates state, returns "") | None |
-| 16 | `code_inline` | `` `[^`]+` `` | callable `_m2a_fmt_inline_code` | None |
-| 17 | `image` | `!\[alt\]\(url\)` | callable `_m2a_fmt_image` | None |
-| 18 | `link` | `\[(?P<*inner>text)\]\((?P<*url>url)\)` | str `"38;5;45;4"` (cyan + underline) | `M2A_CONTEXT_MD` |
-| 19 | `bolditalic` | `\*\*\*...\*\*\*` | str `"1;3"` | `M2A_CONTEXT_MD` |
-| 20 | `bold_under` | `\*\*_..._\*\*` | str `"1;3"` | `M2A_CONTEXT_MD` |
-| 21 | `under_bold` | `_\*\*...\*\*_` | str `"1;3"` | `M2A_CONTEXT_MD` |
-| 22 | `bold` | `\*\*...\*\*` | str `"1"` | `M2A_CONTEXT_MD` |
-| 23 | `strike` | `~~...~~` | str `"9"` | `M2A_CONTEXT_MD` |
-| 24 | `italic` | `(?<!\*)\*...\*(?!\*)` | str `"3"` | `M2A_CONTEXT_MD` |
-| 25 | `footnote_ref` | `\[\^id\]` | callable `_m2a_fmt_footnote_ref` (registers + renders) | None |
+| 8 | `html_hr` | `^[ \t]*(?i:<hr[ \t]*/?>)[ \t]*$` | callable `_m2a_fmt_hr` (reused — full page width) | None |
+| 9 | `code_python` | `` ^```python\n...\n```$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_PYTHON)` | None |
+| 10 | `code_bash` | `` ^```bash\n...\n```$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_BASH)` | None |
+| 11 | `code_javascript` | `` ^```javascript\n...\n```$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_JAVASCRIPT)` | None |
+| 12 | `code_generic` | `` ^(```|~~~)\w*\n...\n(```|~~~)$ `` | lambda → `_m2a_fmt_code(..., M2A_CONTEXT_CODE_GENERIC)` | None |
+| 13 | `blockquote` | `^> ?[^\n]*(?:\n> ?[^\n]*)*$` | callable `_m2a_fmt_blockquote` | None |
+| 14 | `table` | `^[ \t]*\|[^\n]*(?:\n[ \t]*\|[^\n]*)*$` | callable `_m2a_fmt_table` | None |
+| 15 | `list` | matches consecutive lines starting with `-`, `*`, `+`, or `\d+\.` (mixable; indent-driven nesting) | callable `_m2a_fmt_list` | None |
+| 16 | `footnote_def` | `^\[\^id\]:[ \t]+text(\n[ \t]+text)*$` | callable `_m2a_fmt_footnote_def` (mutates state, returns "") | None |
+| 17 | `code_inline` | `` `[^`]+` `` | callable `_m2a_fmt_inline_code` | None |
+| 18 | `escape` | `\\[punct]` | callable `_m2a_fmt_escape` | None |
+| 19 | `html_comment` | `<!--(?:(?!-->)[\s\S])*-->` | callable `_m2a_fmt_comment` (drop — returns "") | None |
+| 20 | `html_br` | `(?i:<br[ \t]*/?>)` | callable `_m2a_fmt_br` (→ `\x01` line-break sentinel) | None |
+| 21 | `html_hr_inline` | `(?i:<hr[ \t]*/?>)` | callable `_m2a_fmt_hr_inline` (→ `\x02` rule sentinel) | None |
+| 22 | `html_entity` | `&(?:\#[0-9]+\|\#[xX][0-9a-fA-F]+\|[a-zA-Z][a-zA-Z0-9]*);` | callable `_m2a_fmt_entity` (decode inline) | None |
+| 23 | `image` | `!\[alt\]\(url\)` | callable `_m2a_fmt_image` | None |
+| 24 | `link` | `\[(?P<*inner>text)\]\((?P<*url>url)\)` | str `"38;5;45;4"` (cyan + underline) | `M2A_CONTEXT_MD` |
+| 25 | `bolditalic` | `\*\*\*...\*\*\*` | str `"1;3"` | `M2A_CONTEXT_MD` |
+| 26 | `bold_under` | `\*\*_..._\*\*` | str `"1;3"` | `M2A_CONTEXT_MD` |
+| 27 | `under_bold` | `_\*\*...\*\*_` | str `"1;3"` | `M2A_CONTEXT_MD` |
+| 28 | `bold` | `\*\*...\*\*` | str `"1"` | `M2A_CONTEXT_MD` |
+| 29 | `strike` | `~~...~~` | str `"9"` | `M2A_CONTEXT_MD` |
+| 30 | `italic` | `(?<!\*)\*...\*(?!\*)` | str `"3"` | `M2A_CONTEXT_MD` |
+| 31 | `footnote_ref` | `\[\^id\]` | callable `_m2a_fmt_footnote_ref` (registers + renders) | None |
 
 Order rationale:
 - Headings 1–6 are mutually exclusive by construction (`^\#{N} ` requires exact count + space). Order doesn't matter among them.
 - Block-level patterns before inline: greedy block matches consume whole blocks before inline rules see fragments.
 - Within block: `code_*` before `blockquote`/`list`/`table` (fenced code can contain `|`, `>`, etc.).
+- `html_hr` immediately after `hr`: a standalone `<hr>` line is a block rule (reuses `_m2a_fmt_hr`, full page width) and must be tried before the inline `html_hr_inline` later in the alternation wins it as content.
+- The four `html_*` inline rules (`html_comment`, `html_br`, `html_hr_inline`, `html_entity`) come **after `escape`** — so `\<br>` / `\&amp;` stay literal — and **before** the emphasis/link rules, so a decoded entity char can never retro-trigger emphasis, a table split, or a heading.
 - `bolditalic` and underscore variants before `bold` (longer delimiter first).
 - `bold` (`**`) before `italic` (`*`) — Python re's alternation is first-match-wins at each position.
 - `image` before `link` (`![]()` vs `[]()`).
+
+The inline rules (`code_inline`/`code_inline2` through `footnote_ref`) live in a separate `_M2A_RULES_INLINE_RAW` tuple that is reused three ways: it builds `M2A_CONTEXT_MD_INLINE`, it forms `M2A_CONTEXT_MD_BLOCKLITE` (those rules plus the six headings, the recursion target for list items / blockquotes), and it is appended to the block rules to form `_M2A_RULES_MD`. So the four `html_*` inline rules reach prose, headings, table cells, list items, blockquotes, and link text by construction. (The §7.1 table is the curated MD grammar; a few engine-internal rules — `frontmatter`, `code_c`, the second inline-code variant `code_inline2` — are present in `_M2A_RULES_MD` but omitted here for readability.)
 
 ### Notes on specific rules
 
@@ -430,6 +440,27 @@ Estimated total: 500–650 lines (verbose-mode patterns inflate line count but p
 ### 10.4 Error tolerance
 
 Markdown is permissive. Anything not matched by any rule passes through unchanged — including mismatched delimiters, stray asterisks, etc.
+
+### 10.5 Flat HTML tags & entities
+
+A small set of **flat** (non-nesting) HTML constructs is supported with zero engine changes — additive rule tuples plus handler edits only. Full detail in `docs/superpowers/specs/2026-06-24-md2ansi-html-flat-tags-design.md`; the essentials:
+
+- **Comments** (`<!-- … -->`) — dropped (handler returns `""`). Preserved literally inside code spans / fenced blocks (those contexts carry no comment rule). `_m2a_fmt_table` strips comments from each raw row before splitting, so a comment containing `|` cannot add a column. Unclosed `<!--` passes through literally.
+- **`<br>` and `<hr>`** (case-insensitive, optional self-close) and **HTML entities** expand as **inert content**: by construction they never interact with Markdown control chars. Every block rule already matched the *raw* source (where the entity was still `&#…;`), so a decoded `*`/`|`/`#` can never retro-trigger emphasis, a table split, or a heading; table column widths are measured on the *expanded* text.
+- **Entities decode during the inline pass** (`&name;` / `&#dec;` / `&#xHEX;`, trailing `;` required). Known named → its char; **unknown named pass through literally** (WHATWG behavior — browsers substitute nothing). Numeric: NUL / surrogate / out-of-range → `�` (U+FFFD); LF/CR → the safe line-break sentinel; `&nbsp;` / U+00A0 → the non-breaking-space sentinel; other C0 / DEL / C1 controls → `�`; otherwise `chr(n)`. Named and numeric share one codepoint helper (`_m2a_entity_char`), so `&nbsp;` and `&#160;` agree.
+
+**Deferred-layout SENTINEL set.** A construct whose realization depends on its enclosing block emits an internal control-char sentinel that the layout owner or the final pass (`_m2a_wrap_rendered`) realizes — never a raw layout char that would corrupt a table or list mid-render:
+
+| Char | Name | Meaning | Realized as |
+|---|---|---|---|
+| `\x00` | `_M2A_OPAQUE` (existing) | line is pre-laid-out | final pass strips the marker (line exempt from wrapping) |
+| `\x01` | `_M2A_LINEBREAK` | hard line break (`<br>`, LF/CR entity) | table/list/quote sub-line split; prose & heading → real `\n` |
+| `\x02` | `_M2A_RULE` | in-container horizontal rule (`<hr>` as content) | `─` run sized to the container (cell / item / `width−2`); prose & heading → full-width rule |
+| `\x03` | `_M2A_NBSP` | non-breaking space (`&nbsp;`, U+00A0 entity) | final pass → `" "` (glues into a word token so it survives wrapping) |
+
+**Input sanitizer** (top of `md2ansi()`): normalize `\r\n` / `\r` → `\n`, then replace every C0 control char except `\t`, `\n`, `\x1b` (ESC kept so pre-colored source survives) with `�` — kill class `[\x00-\x08\x0B\x0C\x0E-\x1A\x1C-\x1F]`. This also neutralizes any stray sentinel char present in the source, so it can never be mistaken for one the library emitted. Net safety property: **no raw control character ever reaches output** — each is routed to a sentinel or replaced with `�`.
+
+`<br>` / `<hr>` inside a heading are rendered (multi-line / rule line, each line color-marked and opaque), not neutralized. Out of scope: paired/nestable tags and structural block HTML — these need tree-structured parsing the flat regex engine does not do.
 
 ## 11. Out of Scope
 
