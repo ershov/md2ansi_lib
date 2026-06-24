@@ -272,6 +272,37 @@ def _m2a_opaque(text):
     return "\n".join(_M2A_OPAQUE + ln for ln in text.split("\n"))
 
 
+def _m2a_split_sentinel_lines(text):
+    """Yield `("text", seg)` / `("rule", None)` tokens for the deferred line
+    sentinels — the single source of truth for how `<br>` (`\\x01`) and `<hr>`
+    (`\\x02`) split a string into lines.
+
+    `\\x01` separates text runs (a hard break); `\\x02` becomes a `("rule", None)`
+    token between runs. An empty text run is dropped when it sits ADJACENT to a
+    rule (`len(segments) > 1`), so a leading/trailing/internal `<hr>` adds no
+    blank line; but an empty `\\x01`-piece with NO rule still yields one blank run
+    so a `<br>` at an edge keeps its blank line. Callers decide what each token
+    renders to — a `─`-run of some width, the table's deferred zero-width marker,
+    a wrapped line, etc.
+
+    The leading membership test is the hot-path fast exit: the vast majority of
+    lines/cells carry no sentinel, so two C-level scans beat the two `str.split`
+    allocations (and any regex) — see the benchmark in the refactor that
+    introduced this.
+    """
+    if _M2A_LINEBREAK not in text and _M2A_RULE not in text:
+        yield ("text", text)
+        return
+    for piece in text.split(_M2A_LINEBREAK):
+        segments = piece.split(_M2A_RULE)
+        for s_idx, seg in enumerate(segments):
+            if s_idx > 0:
+                yield ("rule", None)
+            if not seg and len(segments) > 1:
+                continue
+            yield ("text", seg)
+
+
 def _m2a_inject_color(text, style, reset=None):
     """Wrap `text` in SGR codes so every line carries its own color setup.
 
@@ -321,20 +352,13 @@ def _m2a_fmt_heading(m, name, current_style, context, state, sgr):
     # `\x01` → newline (multi-line heading; `_m2a_inject_color` re-emits the color
     # after each break and `_m2a_opaque` marks each line, so every line stays
     # colored and exempt from wrapping). `\x02` → a `─ × (line_width − 1)` rule
-    # line on its own, mirroring `_m2a_fmt_hr`'s width.
-    inner = inner.replace(_M2A_LINEBREAK, "\n")
-    if _M2A_RULE in inner:
-        rule = "─" * max(1, state.line_width - 1)
-        # Realize the rule PER LINE (mirroring the blockquote handler) so an
-        # internal `\x02` — e.g. `## a<br><hr>`, where the `<br>` already split the
-        # line — doesn't leave a blank line between the text and the rule. A single
-        # global `replace(...).strip("\n")` would only trim the outer edges and
-        # keep that internal blank; stripping each line individually drops the
-        # leading/trailing blank around every `\x02`, matching prose.
-        inner = "\n".join(
-            ln.replace(_M2A_RULE, "\n" + rule + "\n").strip("\n")
-            for ln in inner.split("\n")
-        )
+    # line on its own, mirroring `_m2a_fmt_hr`'s width. The shared splitter drops
+    # the blank line a rule-adjacent empty segment would otherwise add.
+    rule = "─" * max(1, state.line_width - 1)
+    inner = "\n".join(
+        rule if kind == "rule" else seg
+        for kind, seg in _m2a_split_sentinel_lines(inner)
+    )
     return _m2a_opaque(_m2a_inject_color(inner, new_style, current_style))
 
 
@@ -475,17 +499,15 @@ def _m2a_fmt_blockquote(m, name, current_style, context, state):
     # gets its own `│ ` bar. `\x02` → a `─`-run on its own line at the bar-less
     # content width (`wrap_width − 2`, falling back to the page width − 2 when
     # wrapping is off, mirroring `_m2a_fmt_hr`).
-    inner = inner.replace(_M2A_LINEBREAK, "\n")
-    if _M2A_RULE in inner:
-        rule_w = (state.wrap_width if state.wrap_width > 0 else state.line_width) - 2
-        rule = "─" * max(1, rule_w)
-        # Each `\x02` becomes a rule line of its own; text on either side keeps
-        # its own line. Trailing/leading blank lines from an edge `\x02` are
-        # dropped so the rule sits flush, not separated by an empty barred line.
-        inner = "\n".join(
-            ln.replace(_M2A_RULE, "\n" + rule + "\n").strip("\n")
-            for ln in inner.split("\n")
-        )
+    # Each `\x02` becomes a rule line of its own (the shared splitter drops the
+    # blank line a rule-adjacent empty segment would otherwise add, so the rule
+    # sits flush, not separated by an empty barred line).
+    rule_w = (state.wrap_width if state.wrap_width > 0 else state.line_width) - 2
+    rule = "─" * max(1, rule_w)
+    inner = "\n".join(
+        rule if kind == "rule" else seg
+        for kind, seg in _m2a_split_sentinel_lines(inner)
+    )
     bar = _m2a_styled("│", current_style, M2A_COLOR_DIM) + " "
     # The quote owns its layout, so it wraps itself (visible-width aware) before
     # the bar is prefixed — width less the 2-column bar — then marks the result
@@ -601,27 +623,16 @@ def _m2a_fmt_table(m, name, current_style, context, state):
         # cell is laid out (the table marks itself opaque, which bypasses the
         # final sentinel sweep — spec §5.2/§5.3). `\x01` starts a new sub-line;
         # `\x02` becomes a single rule-marker sub-line (the literal `_M2A_RULE`
-        # string). The marker is sized to the frozen column width only at render
-        # time (`render_row`) and demands zero width during measurement
+        # string), sized to the frozen column width only at render time
+        # (`render_row`) and demanding zero width during measurement
         # (`_col_actual`), so it fills the column but never forces it wider.
         if not rendered:
             return [""]
-        if _M2A_LINEBREAK not in rendered and _M2A_RULE not in rendered:
-            return _m2a_wrap_ansi_line(rendered, w, "", "\x1b[m")
         out = []
-        for piece in rendered.split(_M2A_LINEBREAK):
-            # Mirror the prose / list / blockquote rule guard: an empty segment
-            # ADJACENT to a `\x02` rule (`len(segments) > 1`) is dropped, so a
-            # leading/trailing/internal `<hr>` doesn't add a blank sub-line around
-            # the rule. An empty `\x01`-piece with NO rule (`len(segments) == 1`)
-            # still yields one blank sub-line, so a `<br>` at the cell edge keeps
-            # its intended blank row.
-            segments = piece.split(_M2A_RULE)
-            for s_idx, seg in enumerate(segments):
-                if s_idx > 0:
-                    out.append(_M2A_RULE)   # rule-marker sub-line
-                if not seg and len(segments) > 1:
-                    continue
+        for kind, seg in _m2a_split_sentinel_lines(rendered):
+            if kind == "rule":
+                out.append(_M2A_RULE)
+            else:
                 out.extend(_m2a_wrap_ansi_line(seg, w, "", "\x1b[m") if seg else [""])
         return out
 
@@ -794,28 +805,22 @@ def _m2a_fmt_list(m, name, current_style, context, state):
             # `\x02` → a `─`-run on its own hang-indented line, sized to the
             # item-content width (the wrap width less the bullet/hang columns;
             # the page-width fallback when wrapping is off mirrors `_m2a_fmt_hr`).
-            # Each text run still wraps exactly as before; only the bullet line
-            # keeps the bullet — every continuation (break, rule, wrap) hangs.
+            # Only the first emitted text line keeps the bullet; every
+            # continuation (break, rule, wrap) hangs. The shared splitter emits a
+            # rule token per `\x02` and drops rule-adjacent empty segments.
             content_w = state.wrap_width - len(hang) if state.wrap_width > 0 else state.line_width - len(hang)
             rule = "─" * max(1, content_w)
             first = True   # the very first emitted text line carries the bullet
-            for piece in rendered.split(_M2A_LINEBREAK):
-                # Split each hard-break piece on `\x02`: text runs wrap normally,
-                # each rule boundary emits a hang-indented `─` line of its own.
-                segments = piece.split(_M2A_RULE)
-                for s_idx, seg in enumerate(segments):
-                    if s_idx > 0:
-                        out_lines.append(hang + rule)
-                    if not seg and len(segments) > 1:
-                        # Bare `\x02` (no text on this side of the rule) → no blank
-                        # content line around the rule.
-                        continue
-                    line = (bullet_prefix if first else hang) + seg
-                    first = False
-                    if state.wrap_width > 0:
-                        out_lines.extend(_m2a_wrap_ansi_line(line, state.wrap_width, hang))
-                    else:
-                        out_lines.append(line)
+            for kind, seg in _m2a_split_sentinel_lines(rendered):
+                if kind == "rule":
+                    out_lines.append(hang + rule)
+                    continue
+                line = (bullet_prefix if first else hang) + seg
+                first = False
+                if state.wrap_width > 0:
+                    out_lines.extend(_m2a_wrap_ansi_line(line, state.wrap_width, hang))
+                else:
+                    out_lines.append(line)
         else:
             out_lines.append(ln)
     return _m2a_opaque("\n".join(out_lines))
@@ -1494,23 +1499,17 @@ def _m2a_wrap_rendered(text, line_width):
         if ln.startswith(_M2A_OPAQUE):
             out.append(ln[len(_M2A_OPAQUE):])
             continue
-        # Hard breaks first: each `\x01`-piece becomes its own wrapped block.
-        for piece in ln.split(_M2A_LINEBREAK):
-            # A `\x02` acts like a block rule: the prose segments around it wrap
-            # normally, each rule boundary emits a full-width `─` line of its own.
-            segments = piece.split(_M2A_RULE)
-            for i, seg in enumerate(segments):
-                if i > 0:
-                    out.append(rule_line)
-                if not seg and len(segments) > 1:
-                    # Empty segment adjacent to a rule (e.g. a bare `\x02`):
-                    # don't emit a blank prose line around the rule.
-                    continue
-                if line_width > 0:
-                    cont = re.match(r"[ \t]*", seg).group(0)
-                    out.extend(_m2a_wrap_ansi_line(seg, line_width, cont))
-                else:
-                    out.append(seg)
+        # `\x01` (<br>) splits the line; `\x02` (<hr>) acts like a block rule,
+        # emitting a full-width `─` line of its own — both via the shared splitter.
+        for kind, seg in _m2a_split_sentinel_lines(ln):
+            if kind == "rule":
+                out.append(rule_line)
+                continue
+            if line_width > 0:
+                cont = re.match(r"[ \t]*", seg).group(0)
+                out.extend(_m2a_wrap_ansi_line(seg, line_width, cont))
+            else:
+                out.append(seg)
     # `\x03` → " " last, after wrapping, on every output line (opaque included).
     return "\n".join(out).replace(_M2A_NBSP, " ")
 

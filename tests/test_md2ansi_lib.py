@@ -1645,6 +1645,31 @@ def test_realize_rule_sentinel_on_its_own_output_line():
     assert any("after" in ln for ln in lines)
 
 
+def test_split_sentinel_lines_token_semantics():
+    # `_m2a_split_sentinel_lines` is the single source of truth for how the line
+    # sentinels split a string: \x01 separates text runs, \x02 yields a rule
+    # token, and an empty run ADJACENT to a rule is dropped — but an empty
+    # \x01-piece with no rule keeps one blank run.
+    LB, RULE = md._M2A_LINEBREAK, md._M2A_RULE
+    T = lambda s: ("text", s)
+    R = ("rule", None)
+    cases = {
+        "": [T("")],                                          # empty → one blank run
+        "abc": [T("abc")],                                    # no sentinel → fast path
+        f"a{LB}b": [T("a"), T("b")],                          # <br> splits runs
+        f"a{RULE}b": [T("a"), R, T("b")],                     # <hr> → rule between runs
+        f"{RULE}a": [R, T("a")],                              # leading <hr>: no blank
+        f"a{RULE}": [T("a"), R],                              # trailing <hr>: no blank
+        f"{RULE}": [R],                                       # bare <hr>
+        f"{LB}": [T(""), T("")],                              # bare <br> → two blanks
+        f"a{LB}{LB}b": [T("a"), T(""), T("b")],              # empty <br>-piece kept
+        f"a{RULE}{RULE}b": [T("a"), R, R, T("b")],           # internal empty dropped
+        f"a{LB}{RULE}b": [T("a"), R, T("b")],                # \x01 then \x02
+    }
+    for src, expected in cases.items():
+        assert list(md._m2a_split_sentinel_lines(src)) == expected, repr(src)
+
+
 # ─── <br> and in-container <hr> (deferred line sentinels, ticket #79) ─────────
 # Producers: the `html_br` / `html_hr_inline` inline rules emit `\x01` / `\x02`.
 # Each opaque layout owner (table / list / blockquote / heading) realizes those
