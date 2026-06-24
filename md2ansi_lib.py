@@ -303,6 +303,14 @@ def _m2a_split_sentinel_lines(text):
             yield ("text", seg)
 
 
+def _m2a_rule(width):
+    """A horizontal-rule run of `width` columns, floored at 1 so a narrow width
+    or deep nesting can't produce an empty/negative run. Shared by the block HR
+    (`_m2a_fmt_hr`) and every in-container `<hr>` realization; callers compute the
+    container-specific width."""
+    return "─" * max(1, width)
+
+
 def _m2a_inject_color(text, style, reset=None):
     """Wrap `text` in SGR codes so every line carries its own color setup.
 
@@ -335,7 +343,7 @@ def _m2a_styled(text, current_style, sgr):
 
 
 def _m2a_fmt_hr(m, name, current_style, context, state):
-    bar = "─" * max(1, state.line_width - 1)
+    bar = _m2a_rule(state.line_width - 1)
     return _m2a_opaque(_m2a_inject_color(bar, current_style, current_style))
 
 
@@ -354,7 +362,7 @@ def _m2a_fmt_heading(m, name, current_style, context, state, sgr):
     # colored and exempt from wrapping). `\x02` → a `─ × (line_width − 1)` rule
     # line on its own, mirroring `_m2a_fmt_hr`'s width. The shared splitter drops
     # the blank line a rule-adjacent empty segment would otherwise add.
-    rule = "─" * max(1, state.line_width - 1)
+    rule = _m2a_rule(state.line_width - 1)
     inner = "\n".join(
         rule if kind == "rule" else seg
         for kind, seg in _m2a_split_sentinel_lines(inner)
@@ -503,7 +511,7 @@ def _m2a_fmt_blockquote(m, name, current_style, context, state):
     # blank line a rule-adjacent empty segment would otherwise add, so the rule
     # sits flush, not separated by an empty barred line).
     rule_w = (state.wrap_width if state.wrap_width > 0 else state.line_width) - 2
-    rule = "─" * max(1, rule_w)
+    rule = _m2a_rule(rule_w)
     inner = "\n".join(
         rule if kind == "rule" else seg
         for kind, seg in _m2a_split_sentinel_lines(inner)
@@ -738,7 +746,7 @@ def _m2a_fmt_table(m, name, current_style, context, state):
                     if col[k] == _M2A_RULE:
                         # Materialize the rule now that widths are frozen: a `─`
                         # run spanning the full column-content width (spec §5.3).
-                        parts.append(f" {'─' * widths[i]} ")
+                        parts.append(f" {_m2a_rule(widths[i])} ")
                     else:
                         parts.append(f" {_m2a_align_cell(col[k], widths[i], aligns[i])} ")
                 else:
@@ -809,7 +817,7 @@ def _m2a_fmt_list(m, name, current_style, context, state):
             # continuation (break, rule, wrap) hangs. The shared splitter emits a
             # rule token per `\x02` and drops rule-adjacent empty segments.
             content_w = state.wrap_width - len(hang) if state.wrap_width > 0 else state.line_width - len(hang)
-            rule = "─" * max(1, content_w)
+            rule = _m2a_rule(content_w)
             first = True   # the very first emitted text line carries the bullet
             for kind, seg in _m2a_split_sentinel_lines(rendered):
                 if kind == "rule":
@@ -1489,10 +1497,10 @@ def _m2a_wrap_rendered(text, line_width):
     line only `\\x03` is realized: that line owns its layout, so its `\\x01`/`\\x02`
     were already materialized by the block handler that marked it.
     """
-    # Rule run mirrors `_m2a_fmt_hr` exactly: `max(1, W - 1)` with the same 150
+    # Rule run mirrors `_m2a_fmt_hr` (via `_m2a_rule`), with the same 150
     # fallback `md2ansi()` uses for `state.line_width` when wrapping is off.
     rule_w = line_width if line_width > 0 else 150
-    rule_line = "─" * max(1, rule_w - 1)
+    rule_line = _m2a_rule(rule_w - 1)
 
     out = []
     for ln in text.split("\n"):
