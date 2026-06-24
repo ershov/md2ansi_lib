@@ -382,6 +382,78 @@ def _m2a_fmt_hr_inline(m, name, current_style, context, state):
     return _M2A_RULE
 
 
+# Seed set of named HTML entities (~25 common names) → their SINGLE Unicode char
+# (spec §5.4). Numeric entities (`&#dec;` / `&#xHEX;`) cover everything else, so
+# this is intentionally small. Every value is routed through the same codepoint
+# helper as the numeric path (`_m2a_entity_char`), so a named entity and its
+# numeric twin always agree — e.g. `&nbsp;` and `&#160;` both become `\x03`.
+_M2A_HTML_ENTITIES = {
+    "amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'",
+    # ` ` written as an escape (not a literal NBSP, which looks like a plain
+    # space in source) so it can not be "tidied" to U+0020 — its codepoint is what
+    # routes `&nbsp;` to the `\x03` sentinel via `_m2a_entity_char`.
+    "nbsp": "\u00A0", "copy": "©", "reg": "®", "trade": "™",
+    "mdash": "—", "ndash": "–", "hellip": "…", "bull": "•",
+    "middot": "·", "sect": "§", "para": "¶", "deg": "°",
+    "times": "×", "divide": "÷", "laquo": "«", "raquo": "»",
+    "larr": "←", "rarr": "→", "uarr": "↑", "darr": "↓",
+    "pound": "£", "euro": "€", "cent": "¢", "yen": "¥",
+}
+
+
+def _m2a_entity_char(cp):
+    """Map a resolved entity codepoint to its rendered char, applying the same
+    control-codepoint routing for the named and numeric paths (spec §5.4).
+
+    Cases are ordered and mutually exclusive:
+      1. NUL, a surrogate (U+D800–U+DFFF), or out of range (> U+10FFFF) → `�`
+         (U+FFFD). Out-of-range guards `chr()` against `ValueError`.
+      2. LF (U+000A) / CR (U+000D) → the line-break sentinel `\\x01` (a SAFE
+         break: renders as `\\n` in prose and splits cleanly in tables/lists —
+         it must NOT be a raw `\\n`, which the wrapper would eat / which would
+         corrupt a table box).
+      3. U+00A0 → the non-breaking-space sentinel `\\x03`.
+      4. any other control — C0 (< U+0020), DEL (U+007F), or C1 (U+0080–U+009F)
+         → `�`. (We deliberately skip the WHATWG Windows-1252 C1 legacy remap;
+         mapping C1 → `�` keeps the "no raw control survives" property.)
+      5. otherwise → `chr(cp)`.
+    """
+    if cp == 0 or 0xD800 <= cp <= 0xDFFF or cp > 0x10FFFF:
+        return "�"
+    if cp == 0x0A or cp == 0x0D:
+        return _M2A_LINEBREAK
+    if cp == 0xA0:
+        return _M2A_NBSP
+    if cp < 0x20 or cp == 0x7F or 0x80 <= cp <= 0x9F:
+        return "�"
+    return chr(cp)
+
+
+def _m2a_fmt_entity(m, name, current_style, context, state):
+    # HTML entity `&name;` / `&#dec;` / `&#xHEX;`, decoded during the inline pass
+    # (spec §5.4). Timing is automatically correct: every Markdown rule already
+    # matched the RAW source (where the entity was still `&#…;`), so a decoded
+    # `*`/`|`/`#` can never retro-trigger emphasis / a table split / a heading,
+    # and table widths are measured on the expanded text. recurse=None and re.sub
+    # not rescanning the replacement keep `&amp;amp;` → `&amp;` (decoded once).
+    body = m.group(f"{name}_body")
+    if body.startswith("#"):
+        # Numeric: `&#dec;` or `&#xHEX;`. The pattern already constrained the
+        # digits, so int() can't raise; route the codepoint through the shared
+        # helper so numeric and named agree on control handling.
+        digits = body[1:]
+        cp = int(digits[1:], 16) if digits[0] in "xX" else int(digits)
+        return _m2a_entity_char(cp)
+    # Named: a KNOWN name resolves to its char's codepoint via the same helper
+    # (so `&nbsp;` → `\x03`); an UNKNOWN name (matches the shape but not in the
+    # dict) is returned UNCHANGED — literal pass-through, per the WHATWG standard
+    # (browsers substitute nothing for an unknown named entity).
+    ch = _M2A_HTML_ENTITIES.get(body)
+    if ch is None:
+        return m.group(0)
+    return _m2a_entity_char(ord(ch))
+
+
 def _m2a_fmt_image(m, name, current_style, context, state):
     alt = m.group(f"{name}_alt") or ""
     return _m2a_styled(f"[IMG: {alt}]", current_style, f"3;{M2A_COLOR_DIM}")
@@ -1128,6 +1200,19 @@ _MD_HTML_COMMENT = r" <!-- (?: (?! --> ) [\s\S] )* --> "
 # match is also removed.
 _M2A_HTML_COMMENT_RE = re.compile(_MD_HTML_COMMENT, re.VERBOSE | re.DOTALL)
 
+# HTML entity `&name;` / `&#dec;` / `&#xHEX;` — the trailing `;` is REQUIRED, so
+# `AT&T`, a bare `&`, and `&amp` (no `;`) never match → literal pass-through. The
+# `body` group is everything between `&` and `;` (`#dec`, `#xHEX`, or a name);
+# `_m2a_fmt_entity` decodes it. Placed in the inline set AFTER `escape` (so
+# `\&amp;` stays literal) and grouped with the other html_* rules. Code spans are
+# already safe: `code_inline*` precede this and consume a span whole; fenced/code
+# contexts carry no entity rule, so a literal `&amp;` survives there (spec §5.4).
+_MD_HTML_ENTITY = r"""
+    & (?P<*body>
+        \# [0-9]+ | \# [xX] [0-9a-fA-F]+ | [a-zA-Z] [a-zA-Z0-9]*
+    ) ;
+"""
+
 _MD_LINK = rf"""
     (?<!!) \[ (?P<*>
         (?: {_MD_IMAGE_INLINE} | {_MD_ESCAPED} | [^\]\n\\] | \n (?! {_BSA} ) )+
@@ -1206,6 +1291,11 @@ _M2A_RULES_INLINE_RAW = (
     # so they reach prose, headings, cells, list items, blockquotes, link text.
     ("html_br",       _MD_HTML_BR,      _m2a_fmt_br,           None),
     ("html_hr_inline",_MD_HTML_HR_INLINE, _m2a_fmt_hr_inline,  None),
+    # HTML entities — decoded to their Unicode char (or a sentinel for LF/CR/nbsp,
+    # `�` for forbidden codepoints). After `escape` so `\&amp;` stays literal;
+    # grouped with the other html_* rules. recurse=None — the replacement is not
+    # rescanned, so `&amp;amp;` decodes once to `&amp;` (spec §5.4).
+    ("html_entity",   _MD_HTML_ENTITY,  _m2a_fmt_entity,       None),
     ("image",         _MD_IMAGE,        _m2a_fmt_image,        None),
     ("link",          _MD_LINK,         M2A_COLOR_LINK,        _M2A_RECURSE_SELF),
     ("bolditalic",    _MD_BOLDITALIC,   "1;3",                 _M2A_RECURSE_SELF),
@@ -1512,6 +1602,7 @@ _M2A_SPAN_KINDS = {
     "html_hr":      ("hr", "hr"),
     "html_hr_inline": ("hr", "hr"),
     "html_br":      ("br", "br"),
+    "html_entity":  ("entity", "entity"),
     "bolditalic":   ("emphasis", "bolditalic"),
     "bold_under":   ("emphasis", "bolditalic"),
     "under_bold":   ("emphasis", "bolditalic"),

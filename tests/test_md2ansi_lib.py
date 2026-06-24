@@ -1339,7 +1339,7 @@ def test_span_block_kinds_contents():
 def test_span_inline_kinds_contents():
     assert md.M2A_SPANS_INLINE == {
         "code_inline", "escape", "comment", "image", "link", "emphasis",
-        "footnote_ref", "br", "hr",
+        "footnote_ref", "br", "hr", "entity",
     }
 
 
@@ -1935,3 +1935,314 @@ def test_no_sentinel_leaks_in_any_container():
         for lw in (0, 40, 80):
             out = md.md2ansi(src, line_width=lw)
             _assert_no_sentinel_leak(out)
+
+
+# ─── HTML entities — `&name;` / `&#dec;` / `&#xHEX;` (ticket #80) ─────────────
+# The `html_entity` inline rule decodes during the inline pass — AFTER every
+# Markdown rule has matched the RAW source (where the entity is still `&#…;`), so
+# a decoded `*`/`_`/`|`/`#` can never retro-trigger emphasis, a table split, or a
+# heading, and table widths are measured on the expanded text. Code spans /
+# fenced blocks are consumed first / carry no entity rule, so entities stay
+# literal there. Control-codepoint routing mirrors the sentinel model: LF/CR →
+# `\x01` (safe break), U+00A0 → `\x03` (nbsp), everything else dangerous → `�`.
+
+
+# --- Inert content: a decoded char never interacts with Markdown structure ----
+
+
+def test_entity_decimal_asterisk_is_not_italic():
+    # `&#42;` decodes to `*` AFTER the italic rule scanned the raw source, so the
+    # two `*` survive as literal text. Had emphasis fired, the `*` delimiters
+    # would have been consumed — their presence is the proof it did not.
+    plain = strip_ansi(md.md2ansi("&#42;word&#42;"))
+    assert plain == "*word*"
+
+
+def test_entity_decimal_underscore_is_not_emphasis():
+    # Same reasoning as the asterisk case: surviving `_` delimiters prove no
+    # emphasis was triggered by the decoded underscores.
+    plain = strip_ansi(md.md2ansi("&#95;word&#95;"))
+    assert plain == "_word_"
+
+
+def test_entity_decimal_pipe_stays_in_one_table_cell():
+    # `&#124;` (`|`) decodes only after the row was split on raw `|`, so it lands
+    # inside a single cell rather than creating an extra column.
+    src = "| a&#124;b | c |\n|---|---|\n| 1 | 2 |"
+    out = md.md2ansi(src, line_width=80)
+    rows = [ln for ln in strip_ansi(out).splitlines() if ln.startswith("│")]
+    assert rows, "no table rows rendered"
+    for ln in rows:
+        # Two columns -> exactly three `│` separators per row.
+        assert ln.count("│") == 3, f"row mis-split into extra columns: {ln!r}"
+    # The decoded pipe is present inside a cell.
+    assert "a|b" in strip_ansi(out)
+
+
+def test_entity_decimal_hash_at_line_start_is_not_heading():
+    # `&#35;` decodes to `#` after the heading rule already failed on the raw
+    # `&#35; Title` line, so it is plain prose, not an H1. A real H1 would strip
+    # the marker, recolor the title, and mark the line opaque; none of that here.
+    out = md.md2ansi("&#35; Title")
+    plain = strip_ansi(out)
+    assert plain == "# Title"
+    assert md.M2A_COLOR_H1 not in out  # no heading color emitted
+
+
+# --- Decoding: named, numeric, hex, unknown ----------------------------------
+
+
+def test_entity_named_amp_decodes_to_ampersand():
+    assert strip_ansi(md.md2ansi("a &amp; b")) == "a & b"
+
+
+def test_entity_amp_amp_decodes_once_not_recursively():
+    # `&amp;amp;` → `&amp;`: the rule decodes the leading `&amp;` to `&` and the
+    # replacement is NOT rescanned, so the trailing literal `amp;` survives.
+    assert strip_ansi(md.md2ansi("&amp;amp;")) == "&amp;"
+
+
+def test_entity_hex_decodes_to_char():
+    assert strip_ansi(md.md2ansi("&#x41;")) == "A"
+    assert strip_ansi(md.md2ansi("&#X41;")) == "A"  # uppercase X accepted
+
+
+def test_entity_decimal_decodes_to_char():
+    assert strip_ansi(md.md2ansi("&#65;")) == "A"
+
+
+def test_entity_named_mdash_decodes_to_em_dash():
+    assert strip_ansi(md.md2ansi("a&mdash;b")) == "a—b"
+
+
+def test_entity_named_set_decodes_to_expected_chars():
+    # A representative sweep of the seed set → its single Unicode char.
+    cases = {
+        "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'",
+        "&copy;": "©", "&reg;": "®", "&trade;": "™",
+        "&ndash;": "–", "&hellip;": "…", "&bull;": "•",
+        "&middot;": "·", "&sect;": "§", "&para;": "¶",
+        "&deg;": "°", "&times;": "×", "&divide;": "÷",
+        "&laquo;": "«", "&raquo;": "»", "&larr;": "←",
+        "&rarr;": "→", "&uarr;": "↑", "&darr;": "↓",
+        "&pound;": "£", "&euro;": "€", "&cent;": "¢",
+        "&yen;": "¥",
+    }
+    for ent, ch in cases.items():
+        assert strip_ansi(md.md2ansi(ent)) == ch, f"{ent} -> {ch!r}"
+
+
+def test_entity_unknown_named_passes_through_literally():
+    # Matches the entity SHAPE but the name is not in the dict → WHATWG behavior:
+    # the whole match survives verbatim (browsers substitute nothing).
+    assert strip_ansi(md.md2ansi("&notreal;")) == "&notreal;"
+
+
+def test_entity_bare_ampersand_and_missing_semicolon_stay_literal():
+    # The trailing `;` is required, so none of these match the rule.
+    assert strip_ansi(md.md2ansi("AT&T")) == "AT&T"
+    assert strip_ansi(md.md2ansi("a & b")) == "a & b"
+    assert strip_ansi(md.md2ansi("&amp without semicolon")) == "&amp without semicolon"
+
+
+def test_entity_escaped_ampersand_stays_literal():
+    # `\&amp;` is backslash-escaped: the `escape` rule precedes `html_entity`, so
+    # the `&` is emitted literally and the rest (`amp;`) is plain text — no decode.
+    assert strip_ansi(md.md2ansi(r"\&amp;")) == "&amp;"
+
+
+# --- Code contexts: entities are NOT decoded ---------------------------------
+
+
+def test_entity_literal_in_inline_code_span():
+    # The code-span rule precedes the entity rule and consumes the span whole.
+    out = md.md2ansi("a `&amp;` b")
+    assert "&amp;" in strip_ansi(out)
+
+
+def test_entity_literal_in_fenced_code():
+    plain = strip_ansi(md.md2ansi("```\nx = a &amp; b &#42; c\n```"))
+    assert "&amp;" in plain and "&#42;" in plain
+
+
+# --- &nbsp; non-breaking guarantee then a space in output --------------------
+
+
+def test_entity_nbsp_is_non_breaking_then_space():
+    # `&nbsp;` → `\x03`, which glues the two words into one token (so the wrapper
+    # cannot break between them) and finally renders as a plain space.
+    out = md.md2ansi("alpha&nbsp;beta", line_width=80)
+    plain = strip_ansi(out)
+    assert plain == "alpha beta"  # one space, no break
+    assert "\n" not in plain
+    _assert_no_sentinel_leak(out)
+
+
+def test_entity_nbsp_does_not_break_at_wrap_boundary():
+    # Two words glued by `&nbsp;` stay together even when wrapping would otherwise
+    # split there; a following normal space IS a legal break point.
+    out = md.md2ansi("aaaa&nbsp;bbbb cccc", line_width=11)
+    lines = strip_ansi(out).split("\n")
+    # "aaaa bbbb" (9 cols, glued) must stay on one line; "cccc" wraps off.
+    assert any(ln.strip() == "aaaa bbbb" for ln in lines), lines
+
+
+def test_entity_numeric_nbsp_matches_named_nbsp():
+    # `&#160;` / `&#xA0;` route through the same helper as named `&nbsp;`.
+    for ent in ("&#160;", "&#xa0;", "&#xA0;"):
+        out = md.md2ansi(f"alpha{ent}beta", line_width=80)
+        assert strip_ansi(out) == "alpha beta", ent
+        _assert_no_sentinel_leak(out)
+
+
+# --- Premature-decode hazards (spec §8): LF/CR route through the safe break ---
+
+
+def test_entity_lf_in_prose_becomes_newline():
+    plain = strip_ansi(md.md2ansi("alpha&#10;beta", line_width=80))
+    assert plain.split("\n") == ["alpha", "beta"]
+
+
+def test_entity_cr_in_prose_becomes_newline():
+    plain = strip_ansi(md.md2ansi("alpha&#13;beta", line_width=80))
+    assert plain.split("\n") == ["alpha", "beta"]
+
+
+def test_entity_hex_lf_in_prose_becomes_newline():
+    plain = strip_ansi(md.md2ansi("alpha&#x0a;beta", line_width=80))
+    assert plain.split("\n") == ["alpha", "beta"]
+
+
+def test_entity_lf_in_table_cell_is_safe_row_split_box_intact():
+    # `&#10;` inside a cell must behave like `<br>`: a safe sub-line split that
+    # keeps the box intact, NOT a raw `\n` that would corrupt the table.
+    src = "| h1 | h2 |\n|---|---|\n| one&#10;two | x |"
+    out = md.md2ansi(src)
+    body = _table_body_rows(strip_ansi(out))
+    assert len(body) >= 3  # header + 2 stacked body sub-lines
+    cell_rows = [_table_cell_row(ln) for ln in body[1:]]
+    left = [r[0].strip() for r in cell_rows]
+    assert "one" in left and "two" in left
+    assert left.index("one") < left.index("two")
+    # Sibling cell filled on the first sub-line, blank on the continuation.
+    assert cell_rows[0][1].strip() == "x"
+    assert cell_rows[1][1].strip() == ""
+    _assert_no_sentinel_leak(out)
+
+
+def test_entity_cr_in_table_cell_is_safe_row_split():
+    src = "| h | x |\n|---|---|\n| a&#13;b | y |"
+    out = md.md2ansi(src)
+    body = _table_body_rows(strip_ansi(out))
+    cell_rows = [_table_cell_row(ln) for ln in body[1:]]
+    left = [r[0].strip() for r in cell_rows]
+    assert "a" in left and "b" in left
+    assert left.index("a") < left.index("b")
+    _assert_no_sentinel_leak(out)
+
+
+def test_entity_lf_in_nested_list_item_is_safe_break():
+    # `&#10;` inside a nested list item breaks the line with the hang indent
+    # preserved — same as `<br>`.
+    src = "- top\n  - left&#10;right"
+    out = md.md2ansi(src, line_width=80)
+    lines = strip_ansi(out).split("\n")
+    item_idx = next(i for i, ln in enumerate(lines) if "left" in ln)
+    assert "right" in lines[item_idx + 1]
+    assert lines[item_idx + 1].startswith("    right")  # hang indent = 4
+    assert "·" not in lines[item_idx + 1]               # no bullet on continuation
+    _assert_no_sentinel_leak(out)
+
+
+def test_entity_lf_adjacent_to_raw_control_char_gives_newline_then_replacement():
+    # Source: `a` + `&#10;` + literal `\x07` + `b`. The input sanitizer maps the
+    # raw `\x07` → `�` BEFORE rendering; THEN `&#10;` decodes (inline) to `\x01`,
+    # realized to `\n` in the final pass. Result: "a" / "�b" with formatting
+    # intact and no stray control char.
+    out = md.md2ansi("a&#10;\x07b", line_width=80)
+    plain = strip_ansi(out)
+    assert plain.split("\n") == ["a", "�b"], plain.split("\n")
+    assert "\x07" not in out
+    assert "\x01" not in out
+
+
+# --- Premature-decode hazards: dangerous codepoints → U+FFFD -----------------
+
+
+def test_entity_dangerous_control_codepoints_become_replacement_char():
+    # Numeric entities resolving to a forbidden codepoint render as `�` and never
+    # leak a raw control char: C0 (excl. LF/CR), DEL, C1, NUL, and a surrogate.
+    cases = {
+        "&#1;": "SOH", "&#7;": "BEL", "&#127;": "DEL", "&#128;": "C1-low",
+        "&#0;": "NUL", "&#xD800;": "surrogate", "&#xdfff;": "surrogate-hi",
+        "&#x110000;": "out-of-range",
+    }
+    for ent, label in cases.items():
+        out = md.md2ansi(f"x{ent}y")
+        plain = strip_ansi(out)
+        assert plain == "x�y", f"{ent} ({label}) -> {plain!r}"
+        # No raw control char of any kind survives in the styled output.
+        for ctrl in ("\x00", "\x01", "\x02", "\x03", "\x07", "\x7f"):
+            assert ctrl not in out, f"{ent} leaked {ctrl!r}: {out!r}"
+
+
+def test_entity_tab_codepoint_is_replacement_char_no_carveout():
+    # TAB (`&#9;`) has NO carve-out in the entity routing — only LF/CR (→ break)
+    # and U+00A0 (→ nbsp) do. So a TAB *entity* becomes `�`, even though the input
+    # sanitizer keeps a *raw* literal tab. Guards against someone copying the
+    # sanitizer's `\t` exemption into the entity helper.
+    out = md.md2ansi("a&#9;b")
+    assert strip_ansi(out) == "a�b"
+    assert "\t" not in strip_ansi(out)
+
+
+def test_entity_helper_boundary_codepoints():
+    # Direct unit check of the ordered control routing at every boundary.
+    H = md._m2a_entity_char
+    assert H(0x00) == "�"                 # NUL
+    assert H(0x09) == "�"                 # TAB (no carve-out)
+    assert H(0x0A) == "\x01" == H(0x0D)   # LF / CR → safe break sentinel
+    assert H(0x1F) == "�"                 # last C0
+    assert H(0x20) == " "                 # first printable
+    assert H(0x7F) == "�"                 # DEL
+    assert H(0x80) == "�" == H(0x9F)      # C1 range
+    assert H(0xA0) == "\x03"              # nbsp sentinel
+    assert H(0xA1) == "\xa1"              # just past C1, printable
+    assert H(0xD7FF) == chr(0xD7FF)       # just below surrogates
+    assert H(0xD800) == "�" == H(0xDFFF)  # surrogate range
+    assert H(0xE000) == chr(0xE000)       # just above surrogates
+    assert H(0x10FFFF) == chr(0x10FFFF)   # max valid codepoint
+    assert H(0x110000) == "�"             # out of range
+
+
+def test_entity_malformed_shapes_stay_literal():
+    # The pattern requires a well-formed body and a trailing `;`; anything else is
+    # never matched and survives verbatim.
+    for src in ("&;", "a&;b", "&#;", "&#x;", "&#xG;", "&#zzz;", "&# 10;"):
+        assert strip_ansi(md.md2ansi(src)) == src, src
+
+
+def test_entity_named_and_numeric_nbsp_render_identically():
+    # The shared codepoint helper makes named `&nbsp;` and numeric `&#160;`
+    # converge: both end up as a single rendered space, with no sentinel leak.
+    named = md.md2ansi("a&nbsp;b", line_width=80)
+    numeric = md.md2ansi("a&#160;b", line_width=80)
+    assert strip_ansi(named) == strip_ansi(numeric) == "a b"
+    _assert_no_sentinel_leak(named)
+    _assert_no_sentinel_leak(numeric)
+
+
+# --- Scan API surfaces the entity span ---------------------------------------
+
+
+def test_scan_surfaces_html_entity_span():
+    spans = list(md.md2ansi_scan("a &amp; b", {"entity"}))
+    assert [(s.kind, s.subtype, s.is_block) for s in spans] == [
+        ("entity", "entity", False),
+    ]
+    assert spans[0].text == "&amp;"
+
+
+def test_entity_is_a_valid_inline_scan_kind():
+    assert "entity" in md.M2A_SPANS_INLINE
+    assert "entity" in md.M2A_SPANS_ALL
