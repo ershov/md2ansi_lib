@@ -231,11 +231,17 @@ def test_html_hr_self_closing_spaced():
     assert "─" * 9 in out
 
 
-def test_html_hr_with_trailing_text_is_not_block_rule():
-    # Text after `<hr>` means the line is not a standalone rule, so the block
-    # rule must not fire and turn it into a full-width bar.
-    out = md.md2ansi("<hr> x", line_width=10)
-    assert "─" * 9 not in out
+def test_html_hr_with_trailing_text_is_inline_rule_not_block():
+    # Text after `<hr>` means the line is NOT a standalone block rule, so the
+    # block `html_hr` rule must not swallow the whole line. The `<hr>` is instead
+    # matched as inline content (`html_hr_inline` → `\x02`), which the final prose
+    # pass realizes as a full-width rule on its own line, with the trailing text
+    # flowing to the next line (a mid-prose `<hr>` acts like a block rule, §5.3).
+    plain = strip_ansi(md.md2ansi("<hr> x", line_width=10))
+    lines = plain.split("\n")
+    assert "─" * 9 in lines          # the rule got its own full-width line
+    assert any("x" in ln for ln in lines)   # trailing text preserved
+    assert lines[0] == "─" * 9       # rule first, text after
 
 
 def test_fenced_code_python():
@@ -1316,7 +1322,11 @@ def test_design_doc_renders_without_exception():
 
 def test_span_kind_sets_partition():
     assert md.M2A_SPANS_ALL == md.M2A_SPANS_BLOCK | md.M2A_SPANS_INLINE
-    assert md.M2A_SPANS_BLOCK.isdisjoint(md.M2A_SPANS_INLINE)
+    # `hr` is the one kind reachable both as a block (`html_hr`, a standalone
+    # line) and as inline content (`html_hr_inline`, e.g. inside prose / a cell);
+    # the spec maps both to ("hr","hr") and uses `span.is_block` as the
+    # discriminator. So the two broad sets overlap on exactly `hr`.
+    assert md.M2A_SPANS_BLOCK & md.M2A_SPANS_INLINE == {"hr"}
 
 
 def test_span_block_kinds_contents():
@@ -1329,7 +1339,7 @@ def test_span_block_kinds_contents():
 def test_span_inline_kinds_contents():
     assert md.M2A_SPANS_INLINE == {
         "code_inline", "escape", "comment", "image", "link", "emphasis",
-        "footnote_ref",
+        "footnote_ref", "br", "hr",
     }
 
 
@@ -1633,3 +1643,295 @@ def test_realize_rule_sentinel_on_its_own_output_line():
     assert "before" in lines[0]
     assert "─" * _rule_width(40) in lines
     assert any("after" in ln for ln in lines)
+
+
+# ─── <br> and in-container <hr> (deferred line sentinels, ticket #79) ─────────
+# Producers: the `html_br` / `html_hr_inline` inline rules emit `\x01` / `\x02`.
+# Each opaque layout owner (table / list / blockquote / heading) realizes those
+# sentinels into real geometry BEFORE marking itself opaque, because opaque lines
+# bypass the final-pass sentinel sweep (only `\x03`→space runs there). Prose /
+# mid-prose realization is already covered above via `_m2a_wrap_rendered`; here we
+# drive everything through the public `md2ansi()` entry point.
+
+SENTINEL_LEAK_CHARS = ("\x00", "\x01", "\x02", "\x03", "�")
+
+
+def _assert_no_sentinel_leak(out):
+    for ch in SENTINEL_LEAK_CHARS:
+        assert ch not in out, f"sentinel/leak char {ch!r} survived: {out!r}"
+
+
+# --- <br> producer in prose --------------------------------------------------
+
+
+def test_br_splits_prose_line():
+    plain = strip_ansi(md.md2ansi("alpha<br>beta", line_width=80))
+    assert plain.split("\n") == ["alpha", "beta"]
+
+
+def test_br_case_insensitive_and_self_closing_variants():
+    for tag in ("<br>", "<BR>", "<br/>", "<br />", "<Br/>"):
+        plain = strip_ansi(md.md2ansi(f"a{tag}b", line_width=80))
+        assert plain.split("\n") == ["a", "b"], f"{tag!r} did not break: {plain!r}"
+
+
+def test_br_escaped_stays_literal():
+    # `\<br>` is backslash-escaped, so the `escape` rule (which precedes html_br)
+    # keeps it literal — no line break.
+    plain = strip_ansi(md.md2ansi(r"a\<br>b", line_width=80))
+    assert "\n" not in plain
+    assert "<br>" in plain
+
+
+# --- <br> inside a table cell → multi-row cell -------------------------------
+
+
+def test_br_in_table_cell_makes_multirow_cell():
+    # `<br>` in a cell splits it into stacked sub-lines (like width wrapping),
+    # top-aligned with blank padding in the shorter sibling cell.
+    src = "| h1 | h2 |\n|---|---|\n| one<br>two | x |"
+    out = strip_ansi(md.md2ansi(src))
+    body = _table_body_rows(out)
+    # header + 2 stacked body sub-lines.
+    assert len(body) >= 3
+    cell_rows = [_table_cell_row(ln) for ln in body[1:]]
+    left = [r[0].strip() for r in cell_rows]
+    assert "one" in left and "two" in left
+    # `two` is on a later sub-line than `one`.
+    assert left.index("one") < left.index("two")
+    # The sibling cell is filled on the first sub-line, blank on the continuation.
+    assert cell_rows[0][1].strip() == "x"
+    assert cell_rows[1][1].strip() == ""
+    _assert_no_sentinel_leak(md.md2ansi(src))
+
+
+# --- <br> inside a (nested) list item → hard break, hang indent --------------
+
+
+def test_br_in_nested_list_item_preserves_hang_indent():
+    # A `<br>` inside a nested list item breaks the line; the continuation hangs
+    # at the same column as the wrap continuation: `"  "*level + "  "`.
+    src = "- top\n  - left<br>right"
+    plain = strip_ansi(md.md2ansi(src, line_width=80))
+    lines = plain.split("\n")
+    # The nested item is at level 1 → indent "  ", bullet, then content "left".
+    item_idx = next(i for i, ln in enumerate(lines) if "left" in ln)
+    assert "right" in lines[item_idx + 1]
+    # Continuation hang indent = 2 (level) + 2 = 4 spaces before "right".
+    assert lines[item_idx + 1].startswith("    right")
+    # And no bullet on the continuation line.
+    assert "·" not in lines[item_idx + 1]
+    _assert_no_sentinel_leak(md.md2ansi(src, line_width=80))
+
+
+# --- <br> inside a blockquote → break, bar per line --------------------------
+
+
+def test_br_in_blockquote_gives_bar_per_line():
+    src = "> alpha<br>beta"
+    out = md.md2ansi(src, line_width=80)
+    plain = strip_ansi(out)
+    lines = [ln for ln in plain.split("\n") if ln.strip()]
+    # Both halves are present, each on its own barred line.
+    assert any("alpha" in ln for ln in lines)
+    assert any("beta" in ln for ln in lines)
+    for ln in lines:
+        assert ln.lstrip().startswith("│") or "│" in ln
+    # Two distinct barred lines (one per half).
+    assert sum(1 for ln in lines if "alpha" in ln or "beta" in ln) == 2
+    _assert_no_sentinel_leak(out)
+
+
+# --- <br> inside a heading → multi-line heading, each line colored + opaque ---
+
+
+def test_br_in_heading_makes_multiline_colored_opaque():
+    out = md.md2ansi("## one<br>two", line_width=80)
+    plain = strip_ansi(out)
+    lines = plain.split("\n")
+    assert lines == ["one", "two"]
+    # Each heading line still carries the H2 color (re-emitted after the break).
+    h2 = "38;5;214"
+    for ln in out.split("\n"):
+        if ln.strip():
+            assert h2 in ln, f"heading line missing color {h2}: {ln!r}"
+    _assert_no_sentinel_leak(out)
+
+
+def test_br_in_heading_lines_are_opaque_and_not_wrapped():
+    # Multi-line heading lines are opaque, so a long second line is NOT reflowed
+    # by the post-render wrap pass even when it exceeds line_width.
+    long_tail = "wordwordword wordwordword wordwordword"
+    out = md.md2ansi(f"# a<br>{long_tail}", line_width=20)
+    plain = strip_ansi(out)
+    # The tail stays on one (over-wide) line — opaque headings don't wrap.
+    assert long_tail in plain.split("\n")
+
+
+# --- <hr> inside a table cell → `─` at the column-content width --------------
+
+
+def test_hr_in_table_cell_is_column_width_rule():
+    # `aaaaa<hr>` in a cell: the rule sub-line fills the column content width,
+    # which is decided by the real text ("aaaaa" = 5).
+    src = "| h | x |\n|---|---|\n| aaaaa<hr> | y |"
+    out = strip_ansi(md.md2ansi(src))
+    body = _table_body_rows(out)
+    cell_rows = [_table_cell_row(ln) for ln in body[1:]]
+    left = [r[0] for r in cell_rows]
+    # One sub-line is the text, another is an all-`─` run of the column width.
+    assert any(c.strip() == "aaaaa" for c in left)
+    rule_cells = [c for c in left if set(c.strip()) == {"─"}]
+    assert rule_cells, f"no rule sub-line in cell: {left!r}"
+    # The rule spans exactly the content width (5 = len('aaaaa')).
+    assert len(rule_cells[0].strip()) == 5
+    _assert_no_sentinel_leak(md.md2ansi(src))
+
+
+def test_hr_in_table_cell_does_not_widen_column():
+    # CRITICAL: the rule contributes ZERO width demand. A short cell `a<hr>` in a
+    # column sized by a wider sibling row must NOT be widened to that column by
+    # the rule — the rule fills the frozen width, never forces it.
+    src = "| h |\n|---|\n| a<hr> |\n| wide_text |"
+    out = strip_ansi(md.md2ansi(src))
+    body = _table_body_rows(out)
+    cell_rows = [_table_cell_row(ln) for ln in body[1:]]
+    # Column width is set by "wide_text" (9). The rule sub-line in the FIRST body
+    # row must be 9 `─` (frozen width), not something the rule itself forced wider.
+    widest_text = max(
+        (len(c.strip()) for r in cell_rows for c in r if set(c.strip()) != {"─"} and c.strip()),
+        default=0,
+    )
+    assert widest_text == len("wide_text")
+    rule_cells = [c.strip() for r in cell_rows for c in r if set(c.strip()) == {"─"}]
+    assert rule_cells, f"no rule sub-line: {cell_rows!r}"
+    # Every rule sub-line equals the frozen column width — no wider.
+    for rc in rule_cells:
+        assert len(rc) == len("wide_text"), f"rule widened column: {rc!r}"
+
+
+def test_hr_leading_in_table_cell_has_no_blank_row_above_rule():
+    # A cell that BEGINS with `<hr>` (`<hr>aaaaa`) must render the rule flush at
+    # the top — no spurious blank sub-line above it — matching prose, which gives
+    # `['─────', 'aaaaa']`. The empty segment left of the leading `\x02` is dropped.
+    src = "| h | x |\n|---|---|\n| <hr>aaaaa | y |"
+    out = strip_ansi(md.md2ansi(src))
+    body = _table_body_rows(out)
+    cell_rows = [_table_cell_row(ln) for ln in body[1:]]
+    left = [r[0] for r in cell_rows]
+    # The non-blank sub-lines of the cell, in order, are exactly: rule, then text.
+    # No spurious blank sub-line appears above the rule.
+    nonblank = [c.strip() for c in left if c.strip()]
+    assert nonblank[0] == "─────" and nonblank[1] == "aaaaa", (
+        f"expected rule above text with no blank: {left!r}"
+    )
+    # The rule is the very first sub-line of the cell (index 0) — nothing above it.
+    assert set(left[0].strip()) == {"─"}, f"blank row above rule: {left!r}"
+    _assert_no_sentinel_leak(md.md2ansi(src))
+
+
+def test_hr_alone_in_table_cell_does_not_force_min_width():
+    # A cell that is ONLY `<hr>` (no text) measures as zero-width text, so the
+    # column collapses to the engine's floor (1) rather than being pushed wide by
+    # the rule. The rule then fills that 1-wide column.
+    src = "| h |\n|---|\n| <hr> |"
+    out = strip_ansi(md.md2ansi(src))
+    body = _table_body_rows(out)
+    cell_rows = [_table_cell_row(ln) for ln in body[1:]]
+    rule_cells = [c.strip() for r in cell_rows for c in r if set(c.strip()) == {"─"}]
+    assert rule_cells, f"no rule sub-line: {cell_rows!r}"
+    # Header is "h" (1 wide); the rule fills the 1-wide column.
+    assert all(len(rc) == 1 for rc in rule_cells)
+
+
+# --- <hr> inside a (nested) list item → `─` at item width, not full page -----
+
+
+def test_hr_in_nested_list_item_is_item_width_rule():
+    # An `<hr>` inside a nested list item draws a `─` run sized to the item-content
+    # width (line_width minus the indent/bullet columns), NOT the full page width.
+    src = "- top\n  - item<hr>"
+    out = strip_ansi(md.md2ansi(src, line_width=40))
+    lines = out.split("\n")
+    rule_lines = [ln for ln in lines if set(ln.strip()) == {"─"}]
+    assert rule_lines, f"no rule line in list: {lines!r}"
+    rule = rule_lines[0]
+    # Nested item is level 1: indent 2 + bullet "·" + space = 4 content columns.
+    # Item content width = 40 - 4 = 36, well short of the full-page 39.
+    assert len(rule.strip()) == 40 - 4
+    assert len(rule.strip()) < _rule_width(40)  # not full page
+    _assert_no_sentinel_leak(md.md2ansi(src, line_width=40))
+
+
+# --- <hr> inside a heading → colored rule line -------------------------------
+
+
+def test_hr_in_heading_is_colored_rule_line():
+    out = md.md2ansi("## title<hr>", line_width=40)
+    plain = strip_ansi(out)
+    lines = plain.split("\n")
+    assert any("title" in ln for ln in lines)
+    rule_lines = [ln for ln in lines if set(ln.strip()) == {"─"}]
+    assert rule_lines, f"no rule line in heading: {lines!r}"
+    # The rule line is sized line_width - 1 (per spec §5.3 heading branch).
+    assert len(rule_lines[0].strip()) == 40 - 1
+    # The rule line carries the H2 color.
+    h2 = "38;5;214"
+    rule_raw = [ln for ln in out.split("\n") if set(strip_ansi(ln).strip()) == {"─"}]
+    assert any(h2 in ln for ln in rule_raw), f"heading rule missing color: {rule_raw!r}"
+    _assert_no_sentinel_leak(out)
+
+
+def test_heading_br_then_hr_has_no_internal_blank_line():
+    # `## a<br><hr>`: the `<br>` breaks the line, the adjacent `<hr>` is a rule on
+    # its own line. There must be NO blank line between the text and the rule —
+    # the `\x02` is realized PER LINE so an internal rule doesn't insert a blank,
+    # matching prose (`['─────', 'aaaaa']`).
+    plain = strip_ansi(md.md2ansi("## a<br><hr>", line_width=10))
+    assert plain.split("\n") == ["a", "─" * (10 - 1)], plain.split("\n")
+    _assert_no_sentinel_leak(md.md2ansi("## a<br><hr>", line_width=10))
+
+
+def test_heading_leading_hr_renders_rule_then_text():
+    # `## <hr>x`: a leading `<hr>` draws the rule line first, then the text — no
+    # blank line above the rule.
+    plain = strip_ansi(md.md2ansi("## <hr>x", line_width=10))
+    assert plain.split("\n") == ["─" * (10 - 1), "x"], plain.split("\n")
+    _assert_no_sentinel_leak(md.md2ansi("## <hr>x", line_width=10))
+
+
+# --- mid-prose <hr> through the full md2ansi() path --------------------------
+
+
+def test_hr_mid_prose_is_full_width_rule_via_md2ansi():
+    # Wired by the final pass, but verify end-to-end through the rules.
+    out = md.md2ansi("before<hr>after", line_width=40)
+    plain = strip_ansi(out)
+    lines = plain.split("\n")
+    assert any("before" in ln for ln in lines)
+    assert any("after" in ln for ln in lines)
+    assert "─" * _rule_width(40) in lines
+    _assert_no_sentinel_leak(out)
+
+
+# --- INVARIANT guard: no raw sentinel survives in opaque output --------------
+
+
+def test_no_sentinel_leaks_in_any_container():
+    # Each opaque layout owner must fully materialize its `\x01`/`\x02` before
+    # marking itself opaque (opaque lines bypass the final sentinel sweep). Assert
+    # NO literal sentinel / replacement char survives anywhere in the output.
+    cases = [
+        # table cell, both sentinels
+        "| h | x |\n|---|---|\n| a<br>b<hr>c | y |",
+        # nested list item, both sentinels
+        "- top\n  - left<br>right<hr>tail",
+        # blockquote, both sentinels
+        "> alpha<br>beta<hr>gamma",
+        # heading, both sentinels
+        "## one<br>two<hr>three",
+    ]
+    for src in cases:
+        for lw in (0, 40, 80):
+            out = md.md2ansi(src, line_width=lw)
+            _assert_no_sentinel_leak(out)
