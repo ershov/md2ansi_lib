@@ -887,6 +887,11 @@ _MD_H6 = r"^ \#{6} [ \t]+ (?P<*> [^\n]+ ) $"
 
 _MD_HR = r"^ (?: -{3,} | ={3,} | _{3,} ) [ \t]* $"
 
+# A standalone `<hr>` line (optionally self-closing, any case). Scoped (?i:…)
+# because the engine compiles with re.VERBOSE | MULTILINE | DOTALL but no
+# global IGNORECASE. Reuses _m2a_fmt_hr (full page width) — see spec §5.3.
+_MD_HTML_HR = r"^ [ \t]* (?i: < hr [ \t]* /? > ) [ \t]* $"
+
 # Frontmatter — anchored to file start via `\A` so it never matches
 # mid-document. Empty `(?P<*indent>)` group so the shared `_m2a_fmt_code`
 # framing (which reads `{name}_indent`) works with no indent. The body is a run
@@ -1082,6 +1087,7 @@ _M2A_RULES_MD = (
     ("h5",            _MD_H5,           _m2a_heading_lambda(M2A_COLOR_H5),            None),
     ("h6",            _MD_H6,           _m2a_heading_lambda(M2A_COLOR_H6),            None),
     ("hr",            _MD_HR,           _m2a_fmt_hr,                                  None),
+    ("html_hr",       _MD_HTML_HR,      _m2a_fmt_hr,                                  None),
     ("code_python",   _MD_CODE_PY,      _m2a_code_lambda(M2A_CONTEXT_CODE_PYTHON,     "python"),     None),
     ("code_bash",     _MD_CODE_BASH,    _m2a_code_lambda(M2A_CONTEXT_CODE_BASH,       "bash"),       None),
     ("code_js",       _MD_CODE_JS,      _m2a_code_lambda(M2A_CONTEXT_CODE_JAVASCRIPT, "javascript"),None),
@@ -1323,6 +1329,7 @@ _M2A_SPAN_KINDS = {
     "code_inline2": ("code_inline", "code_inline"),
     "code_inline":  ("code_inline", "code_inline"),
     "html_comment": ("comment", "comment"),
+    "html_hr":      ("hr", "hr"),
     "bolditalic":   ("emphasis", "bolditalic"),
     "bold_under":   ("emphasis", "bolditalic"),
     "under_bold":   ("emphasis", "bolditalic"),

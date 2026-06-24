@@ -198,6 +198,46 @@ def test_hr_uses_line_width():
     assert "─" * 9 in out
 
 
+def test_html_hr_uses_line_width():
+    # A standalone `<hr>` line draws the same full-width bar as a markdown `---`.
+    out = md.md2ansi("<hr>", line_width=10)
+    assert "─" * 9 in out
+
+
+def test_html_hr_bar_tracks_line_width():
+    # The bar length follows line_width, exactly like the markdown-HR rule.
+    out = md.md2ansi("<hr>", line_width=25)
+    assert "─" * 24 in out
+    assert "─" * 25 not in out
+
+
+def test_html_hr_leading_whitespace():
+    out = md.md2ansi("   <hr>", line_width=10)
+    assert "─" * 9 in out
+
+
+def test_html_hr_case_insensitive():
+    out = md.md2ansi("<HR>", line_width=10)
+    assert "─" * 9 in out
+
+
+def test_html_hr_self_closing():
+    out = md.md2ansi("<hr/>", line_width=10)
+    assert "─" * 9 in out
+
+
+def test_html_hr_self_closing_spaced():
+    out = md.md2ansi("<hr />", line_width=10)
+    assert "─" * 9 in out
+
+
+def test_html_hr_with_trailing_text_is_not_block_rule():
+    # Text after `<hr>` means the line is not a standalone rule, so the block
+    # rule must not fire and turn it into a full-width bar.
+    out = md.md2ansi("<hr> x", line_width=10)
+    assert "─" * 9 not in out
+
+
 def test_fenced_code_python():
     out = md.md2ansi("```python\ndef f(): return 42\n```")
     assert f"{ESC}0;38;5;204mdef{ESC}0m" in out          # keyword
