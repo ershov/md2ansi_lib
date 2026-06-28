@@ -1198,6 +1198,36 @@ def test_table_wrap_no_style_leak_across_cells():
         raise AssertionError("expected a line containing 'bold'")
 
 
+# ─── Non-default base style (current_style != "0") ───────────────────────────
+# An application can set a non-default ambient SGR (e.g. a background) before the
+# rendered text and pass it as `current_style`. Every span the library opens must
+# reset BACK to that style — never to bare `\x1b[m`/`\x1b[0m`, which would knock
+# the terminal out of the ambient style and leave following text unstyled.
+
+
+def test_table_cell_resets_to_current_style_not_zero():
+    # Each cell sub-line must reset to the caller's current_style, so the cell
+    # padding, the `│` separators, and the box borders stay in that style.
+    out = md.md2ansi("| a | b |\n|---|---|\n| 1 | 2 |", current_style="48;5;236")
+    assert "\x1b[48;5;236m" in out                 # resets back to the base style
+    assert "\x1b[m" not in out and "\x1b[0m" not in out, repr(out)
+
+
+def test_table_wrap_resets_to_current_style_not_zero():
+    # A wrapped cell must also reset to current_style at each break.
+    src = "| h | x |\n|---|---|\n| a very long cell that will certainly wrap here | y |"
+    out = md.md2ansi(src, current_style="48;5;236", line_width=30)
+    assert "\x1b[m" not in out and "\x1b[0m" not in out, repr(out)
+
+
+def test_table_bold_cell_resets_to_current_style_not_zero():
+    # An inline bold span inside a cell must close back to current_style, and the
+    # cell-wrap reset must not append a bare reset-to-nothing afterwards.
+    src = "| **bold spanning across the wrap point in this cell** | y |\n|---|---|\n| body | y |"
+    out = md.md2ansi(src, current_style="48;5;236", line_width=30)
+    assert "\x1b[m" not in out and "\x1b[0m" not in out, repr(out)
+
+
 def test_table_wrap_preserves_inline_formatting_across_breaks():
     # A wrapped cell with `**bold**` and inline `` `code` `` spans must keep
     # the styling intact across the wrap break — the markdown markers must
