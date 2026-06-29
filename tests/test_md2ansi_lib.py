@@ -1203,13 +1203,40 @@ def test_table_wrap_no_style_leak_across_cells():
 # rendered text and pass it as `current_style`. Every span the library opens must
 # reset BACK to that style — never to bare `\x1b[m`/`\x1b[0m`, which would knock
 # the terminal out of the ambient style and leave following text unstyled.
+#
+# The close must also CLEAR any attribute the span layered on (bold/italic/fg):
+# re-asserting a non-zero base alone (e.g. `\x1b[48;5;236m`) only re-sets the
+# params it names and leaves bold/italic ON. So the base is normalized to begin
+# with a reset and every close is `\x1b[0;{base}m` — clears all, re-applies base.
+
+
+def test_bold_close_clears_layered_attrs_under_nonzero_base():
+    # Bold (1) is only turned off by a reset; the close must be `\x1b[0;{base}m`,
+    # not `\x1b[{base}m` (which would leave the tail bold).
+    out = md.md2ansi("**x** tail", current_style="48;5;236")
+    assert out == f"{ESC}0;48;5;236;1mx{ESC}0;48;5;236m tail"
+
+
+def test_list_bullet_close_clears_bold_under_nonzero_base():
+    # The bold list bullet must close reset-prefixed so the item text isn't bold.
+    out = md.md2ansi("- a", current_style="48;5;236")
+    assert f"{ESC}0;48;5;236m" in out        # reset-prefixed close clears bold
+    assert f"{ESC}48;5;236m" not in out      # never an un-reset base re-assert
+
+
+def test_heading_fg_close_clears_under_nonzero_base():
+    # A heading layers a foreground; its close must reset so following prose
+    # doesn't inherit the heading color.
+    out = md.md2ansi("# H", current_style="48;5;236")
+    assert f"{ESC}0;48;5;236m" in out
+    assert f"{ESC}48;5;236m" not in out
 
 
 def test_table_cell_resets_to_current_style_not_zero():
     # Each cell sub-line must reset to the caller's current_style, so the cell
     # padding, the `│` separators, and the box borders stay in that style.
     out = md.md2ansi("| a | b |\n|---|---|\n| 1 | 2 |", current_style="48;5;236")
-    assert "\x1b[48;5;236m" in out                 # resets back to the base style
+    assert "\x1b[0;48;5;236m" in out               # reset-prefixed close re-applies the base
     assert "\x1b[m" not in out and "\x1b[0m" not in out, repr(out)
 
 
